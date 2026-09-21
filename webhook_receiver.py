@@ -17,6 +17,7 @@ Then expose it:  cloudflared tunnel --url http://localhost:8787
 from __future__ import annotations
 
 import argparse
+import html as html_lib
 import hmac
 import json
 import mimetypes
@@ -373,6 +374,14 @@ RE_NEW = re.compile(r"(?i)^\s*new\b[\s:,.\-]*")
 RE_YES = re.compile(r"(?i)^\s*(y|yes|yeah|yep|same|add|that one|correct)\s*[.!]*\s*$")
 RE_NO = re.compile(r"(?i)^\s*(n|no|nope|new one|different)\s*[.!]*\s*$")
 RE_DONE = re.compile(r"(?i)^\s*(done|finished|that'?s it|end|send it)\s*[.!]*\s*$")
+# "UPDATE" is deliberately the only way to touch a page that is already live. Nothing is
+# inferred: a crew saying "we also did the garage door" starts a new job, because guessing
+# wrong here means silently rewriting a page a human already signed off on.
+RE_UPDATE = re.compile(r"(?i)^\s*(update|revise)\b[\s:,.\-]*")
+
+# How far back an UPDATE will look for the page it means. Long, because a customer asking
+# for a correction weeks later is the normal case.
+UPDATE_WINDOW_HOURS = 24 * 60
 
 
 def find_recent_held(client_id: str, phone: str, hours: float) -> Optional[Path]:
@@ -401,6 +410,72 @@ def find_recent_held(client_id: str, phone: str, hours: float) -> Optional[Path]
         if best is None or mt > best[0]:
             best = (mt, d)
     return best[1] if best else None
+
+
+def find_recent_published(client_id: str, phone: str, hours: float) -> Optional[Path]:
+    """Most recent LIVE page from this crew number - the thing an UPDATE would revise.
+
+    Deliberately separate from find_recent_held(): that one looks for drafts still in
+    review, this one for pages already on the site. Merging them would let an ordinary
+    follow-up text reach live content.
+    """
+    best: Optional[tuple] = None
+    cutoff = time.time() - hours * 3600
+    for d in JOBS.iterdir():
+        sp = d / "status.json"
+        if not d.is_dir() or not sp.exists():
+            continue
+        try:
+            st = json.loads(sp.read_text())
+        except Exception:
+            continue
+        if st.get("client_id") != client_id or st.get("phone") != phone:
+            continue
+        if st.get("state") != "published" or not (st.get("wp") or {}).get("id"):
+            continue
+        when = st.get("approved_at_ts") or sp.stat().st_mtime
+        if when < cutoff:
+            continue
+        if best is None or when > best[0]:
+            best = (when, d)
+    return best[1] if best else None
+
+
+def start_update(prior: Path, out: Path, job_id: str,
+                 crew_text: str, new_files: List[Path]) -> tuple:
+    """Seed a fresh draft from a published job so the revision can go through review.
+
+    The published job directory is never touched. Its draft.json is what is live, and the
+    hash in it is what the approver signed off on; regenerating over it would destroy the
+    only record of that. So the update is a NEW job that happens to carry the old page's
+    WordPress id, and the live page keeps serving the approved version until somebody
+    approves the replacement.
+    """
+    pst = json.loads((prior / "status.json").read_text())
+    pin = json.loads((prior / "inbound.json").read_text())
+
+    inbox = out / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    carried: List[Path] = []
+    for i, src in enumerate(sorted((prior / "inbox").glob("in-*"))):
+        dst = inbox / f"in-{i:02d}{src.suffix}"
+        dst.write_bytes(src.read_bytes())
+        carried.append(dst)
+    # New photos append, so existing captions keep their indexes and the crew can add a
+    # shot of the thing they are telling us about.
+    files = carried + new_files
+    merged = f"{pin.get('crew_text','').strip()} {crew_text.strip()}".strip()
+
+    wp = pst.get("wp") or {}
+    meta = {
+        "update_of": prior.name,
+        "wp_page_id": wp.get("id"),
+        "wp_url": wp.get("url"),
+        "prior_media": wp.get("media_meta") or [],
+    }
+    log(f"update: job {job_id} revises {prior.name} (page {wp.get('id')}) "
+        f"— \"{crew_text[:50]}\"")
+    return files, merged, meta
 
 
 def merge_followup(cfg: Dict[str, Any], cc: Dict[str, Any], job_dir: Path,
@@ -508,8 +583,11 @@ def do_publish(job_id: str):
     wp = cc.get("wordpress") or {}
     if not wp.get("base"):
         return False, {"error": "no WordPress target configured"}
+    page_id = st.get("wp_page_id") if st.get("update_of") else None
     try:
-        res = wp_publish.publish_job(cfg, wp, JOBS / job_id, log=log)
+        res = wp_publish.publish_job(cfg, wp, JOBS / job_id, log=log,
+                                     update_page_id=page_id,
+                                     prior_media=st.get("prior_media") or [])
     except Exception as e:
         log(f"  ! publish failed: {e}")
         st["state"] = "publish_failed"; st["error"] = str(e)[:500]
@@ -520,7 +598,24 @@ def do_publish(job_id: str):
     st["published_hash"] = (json.loads((JOBS / job_id / "draft.json").read_text())
                             .get("content_hash", ""))
     st["approved_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    st["approved_at_ts"] = time.time()
     sp.write_text(json.dumps(st, indent=2))
+
+    if page_id:
+        # The revision now owns that URL. Leaving the old job "published" would put the
+        # same page in the feed twice and make the next UPDATE ambiguous about which
+        # record it is revising.
+        prior_sp = JOBS / st["update_of"] / "status.json"
+        try:
+            prior_st = json.loads(prior_sp.read_text())
+            prior_st["state"] = "superseded"
+            prior_st["superseded_by"] = job_id
+            prior_st["superseded_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            prior_sp.write_text(json.dumps(prior_st, indent=2))
+            log(f"  {st['update_of']} superseded by {job_id}")
+        except Exception as e:
+            log(f"  ! could not mark {st.get('update_of')} superseded: {e}")
+
     if res.get("status") == "publish":
         wp_publish.ping_indexnow(wp, res.get("url", ""), log=log)
     return True, res
@@ -548,6 +643,26 @@ def process(key: str, batch: Dict[str, Any]) -> None:
 
     files = fetch_media(batch["media"], out / "inbox", cc)
 
+    update_meta: Dict[str, Any] = {}
+    if batch.get("force_update"):
+        prior = find_recent_published(client_id, batch["phone"], UPDATE_WINDOW_HOURS)
+        if not prior:
+            log("  UPDATE with no published page to revise")
+            notify(cc, {"phone": batch["phone"], "contact_id": batch.get("contact_id", ""),
+                        "sms": ("No published page from this number to update. "
+                                "Text NEW plus photos to start a fresh one.")})
+            import shutil
+            shutil.rmtree(out, ignore_errors=True)
+            return
+        files, crew_text, update_meta = start_update(
+            prior, out, job_id, crew_text, files)
+        (out / "inbound.json").write_text(json.dumps(
+            {"job_id": job_id, "client_id": client_id, "phone": batch["phone"],
+             "contact_id": batch.get("contact_id", ""),
+             "crew_text": crew_text, "media_urls": batch["media"],
+             "update_of": update_meta["update_of"],
+             "received": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=2))
+
     if not files and re.fullmatch(r"(?i)\s*(publish|ok|approve|yes|send it)\s*[.!]?\s*", crew_text or ""):
         # A bare approval keyword publishes the most recent READY draft - but only from a
         # number on the approver list. A crew member saying "ok" must not publish to a
@@ -571,7 +686,7 @@ def process(key: str, batch: Dict[str, Any]) -> None:
             log(f"  text approval ignored — {batch['phone']} is not an approver")
 
     import shutil
-    if not files and crew_text and not batch.get("force_new"):
+    if not files and crew_text and not batch.get("force_new") and not batch.get("force_update"):
         pend = load_ask(client_id, batch["phone"])
         prior = find_recent_held(client_id, batch["phone"], FOLLOWUP_WINDOW_HOURS)
 
@@ -640,12 +755,39 @@ def process(key: str, batch: Dict[str, Any]) -> None:
          "approve_token": approve_token,
          "awaiting_answer": bool(page.get("followup_question")),
          "content_hash": r.get("content_hash", ""),
-         "headline": page["h1"], "link": link}, indent=2))
+         "headline": page["h1"], "link": link, **update_meta}, indent=2))
+
+    if update_meta:
+        # Approving this overwrites a page that is already public. That has to be visible on
+        # the preview itself, not only in the text message that led here.
+        try:
+            pv = out / "preview.html"
+            doc = pv.read_text(encoding="utf-8")
+            live = html_lib.escape(update_meta.get("wp_url") or "")
+            banner = (
+                '<div style="background:#fff4e5;border:1px solid #f0b37e;'
+                'border-radius:6px;padding:12px 14px;margin:0 0 18px">'
+                '<strong>This replaces a page that is already live.</strong><br>'
+                f'Approving rewrites <a href="{live}">{live}</a> in place — same URL, '
+                'new title and copy. The live page is unchanged until you approve.'
+                '</div>')
+            marker = "<h2>As it would appear in search</h2>"
+            if marker in doc:
+                pv.write_text(doc.replace(marker, banner + marker, 1), encoding="utf-8")
+        except Exception as e:
+            log(f"  ! could not add update banner to preview: {e}")
 
     verdict_label = {"BLOCKED": "BLOCKED", "HOLD-FOR-REVIEW": "HOLD",
                      "READY-FOR-APPROVAL": "READY"}.get(r["verdict"], r["verdict"])
-    sms = (f"[{verdict_label}] {page['h1']}\n"
-           f"{r.get('town_label','')} · quality {page['quality_score']}\n{link}?t={approve_token}")
+    if update_meta:
+        # The approver needs to know this replaces something already on the site, and that
+        # the live page is unchanged until they act.
+        sms = (f"[{verdict_label} · UPDATE] {page['h1']}\n"
+               f"Replaces {update_meta.get('wp_url','the live page')}\n"
+               f"Live page unchanged until you approve.\n{link}?t={approve_token}")
+    else:
+        sms = (f"[{verdict_label}] {page['h1']}\n"
+               f"{r.get('town_label','')} · quality {page['quality_score']}\n{link}?t={approve_token}")
 
     log(f"  {r['verdict']}  ${r['cost_usd']:.3f}  {page['h1']}")
     notify(cc, {"job_id": job_id, "phone": batch["phone"],
@@ -720,23 +862,30 @@ def inbound(client_id: str, path_token: str = ""):
     key = f"{client_id}:{msg['phone']}"
     body = msg["body"]
     starts_new = bool(RE_NEW.match(body)) and not RE_DONE.fullmatch(body)
+    starts_update = bool(RE_UPDATE.match(body)) and not RE_DONE.fullmatch(body)
     is_done = bool(RE_DONE.fullmatch(body))
 
     with _lock:
         # "NEW" closes whatever was open and begins a clean job
-        if starts_new and key in _pending:
+        if (starts_new or starts_update) and key in _pending:
             closing = _pending.pop(key)
             closing["last"] = 0.0          # sweeper fires it on the next tick
             _pending[f"{key}#closed-{uuid.uuid4().hex[:6]}"] = closing
-            log(f"  'NEW' — closing the open batch for {msg['phone']}")
+            log(f"  '{'NEW' if starts_new else 'UPDATE'}' — closing the open batch "
+                f"for {msg['phone']}")
         if starts_new:
             body = RE_NEW.sub("", body).strip()
+        if starts_update:
+            body = RE_UPDATE.sub("", body).strip()
 
         b = _pending.setdefault(key, {"client_id": client_id, "phone": msg["phone"],
                                        "texts": [], "media": [], "contact_id": "",
-                                       "force_new": False, "last": 0.0})
+                                       "force_new": False, "force_update": False,
+                                       "last": 0.0})
         if starts_new:
             b["force_new"] = True
+        if starts_update:
+            b["force_update"] = True
         if body and not is_done:
             b["texts"].append(body)
         b["media"].extend(msg["media"])
@@ -754,7 +903,9 @@ def inbound(client_id: str, path_token: str = ""):
 
     window = cc.get("batch_window_seconds", 180)
     log(f"queued {client_id} {msg['phone']} — {n} text(s), {m} media, "
-        f"firing in {window}s{' [NEW]' if b.get('force_new') else ''}")
+        f"firing in {window}s"
+        f"{' [NEW]' if b.get('force_new') else ''}"
+        f"{' [UPDATE]' if b.get('force_update') else ''}")
     return jsonify({"ok": True, "queued": True}), 200
 
 

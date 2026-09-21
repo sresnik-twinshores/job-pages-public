@@ -12,6 +12,7 @@ pages and the sitemap — those need the weekly manual purge.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
 import os
@@ -100,6 +101,27 @@ def upload_photo(wp: Dict[str, Any], path: Path, alt: str, caption: str, log=pri
     return m
 
 
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def retag_photo(wp: Dict[str, Any], media_id: int, alt: str, caption: str,
+                log=print) -> Dict[str, Any]:
+    """Re-point an existing attachment's alt/caption at freshly generated text.
+
+    An update regenerates every caption, but the bytes are usually the same photos. Editing
+    the attachment in place keeps one copy in the media library instead of a duplicate per
+    revision, and keeps the URL the live page already references.
+    """
+    r = requests.post(_api(wp, f"media/{media_id}"), auth=_auth(wp), timeout=TIMEOUT,
+                      headers=_headers(),
+                      json={"alt_text": alt, "caption": caption, "title": alt[:120]})
+    if r.status_code not in (200, 201):
+        raise PublishError(f"media retag failed: {r.status_code} {r.text[:300]}")
+    log(f"  reused media {media_id}")
+    return r.json()
+
+
 def build_html(page: Dict[str, Any], media: List[Dict[str, Any]],
                schema_org: Dict[str, Any], cfg: Dict[str, Any]) -> str:
     parts = [page["body_html"]]
@@ -122,39 +144,65 @@ def build_html(page: Dict[str, Any], media: List[Dict[str, Any]],
     return "\n\n".join(parts)
 
 
-def publish_job(cfg: Dict[str, Any], wp: Dict[str, Any], job_dir: Path, log=print) -> Dict[str, Any]:
+def publish_job(cfg: Dict[str, Any], wp: Dict[str, Any], job_dir: Path, log=print,
+                update_page_id: Optional[int] = None,
+                prior_media: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Create the page, or - with update_page_id - rewrite an existing one in place.
+
+    An update never changes the live URL. The generator rewrites the headline freely, and a
+    new headline means a new slug; letting that through would move a page that already has
+    links and rankings pointing at it. Title and body change, the address does not.
+    """
     draft = json.loads((job_dir / "draft.json").read_text())
     page = draft["page"]
     if draft["verdict"] == "BLOCKED":
         raise PublishError("refusing to publish a BLOCKED draft")
 
-    parent_id = find_or_create_parent(wp, log)
+    reuse = {m["sha"]: m for m in (prior_media or [])
+             if isinstance(m, dict) and m.get("sha") and m.get("id")}
 
     media: List[Dict[str, Any]] = []
     cap = {p["index"]: p for p in page.get("photos", [])}
     for i, p in enumerate(sorted(job_dir.glob("photo-*.jpg"))):
         c = cap.get(i, {})
-        media.append(upload_photo(wp, p, c.get("alt", ""), c.get("caption", ""), log))
+        sha = sha256_file(p)
+        prev = reuse.get(sha)
+        if prev:
+            m = retag_photo(wp, prev["id"], c.get("alt", ""), c.get("caption", ""), log)
+        else:
+            m = upload_photo(wp, p, c.get("alt", ""), c.get("caption", ""), log)
+        m["sha"] = sha
+        media.append(m)
 
     body = {
         "title": page["h1"],
-        "slug": page["slug"],
-        "status": wp.get("publish_status", "draft"),   # 'draft' until explicitly trusted
-        "parent": parent_id,
         "content": build_html(page, media, draft["schema_org"], cfg),
         "excerpt": page["meta_description"],
     }
     if media:
         body["featured_media"] = media[0]["id"]
 
-    r = requests.post(_api(wp, "pages"), auth=_auth(wp), timeout=TIMEOUT,
-                      headers=_headers(), json=body)
+    if update_page_id:
+        # No slug, no status, no parent: an update rewrites content on a page that already
+        # has a URL and a publication state a human chose.
+        url = _api(wp, f"pages/{update_page_id}")
+    else:
+        body["slug"] = page["slug"]
+        body["status"] = wp.get("publish_status", "draft")   # 'draft' until explicitly trusted
+        body["parent"] = find_or_create_parent(wp, log)
+        url = _api(wp, "pages")
+
+    r = requests.post(url, auth=_auth(wp), timeout=TIMEOUT, headers=_headers(), json=body)
     if r.status_code not in (200, 201):
-        raise PublishError(f"page create failed: {r.status_code} {r.text[:400]}")
+        verb = "page update" if update_page_id else "page create"
+        raise PublishError(f"{verb} failed: {r.status_code} {r.text[:400]}")
     out = r.json()
-    log(f"  published: {out.get('link')} (status {out.get('status')})")
+    log(f"  {'updated' if update_page_id else 'published'}: {out.get('link')} "
+        f"(status {out.get('status')})")
     return {"id": out["id"], "url": out.get("link"), "status": out.get("status"),
-            "media": [m.get("source_url") for m in media]}
+            "media": [m.get("source_url") for m in media],
+            "media_meta": [{"id": m.get("id"), "url": m.get("source_url"),
+                            "sha": m.get("sha")} for m in media]}
 
 
 def refresh_status(wp: Dict[str, Any], page_id: int) -> Optional[Dict[str, Any]]:

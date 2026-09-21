@@ -83,8 +83,11 @@ volume at `/app/jobs`. See `DEPLOY.md`.
 ## Status
 
 Working end to end in production since 2026-09-21: intake, batching, generation, guards,
-threading with disambiguation, `NEW`/`DONE`/`PUBLISH` keywords, token-protected approval,
-freeze-on-approval, WordPress publishing, the hub map, town reverse-links, and GPS
+threading with disambiguation, `NEW`/`DONE`/`PUBLISH`/`UPDATE` keywords, token-protected
+approval, freeze-on-approval, WordPress publishing, the hub map, town reverse-links, and GPS
 verification.
 
-Not built yet: texted updates to an already-published page.
+A published page is revised by texting `UPDATE` and what changed. That builds a *new* draft
+carrying the live page's WordPress id, so the site keeps serving the approved version until
+somebody approves the replacement; approving rewrites that page in place, at the same URL,
+reusing unchanged photos. Nothing reaches live content without going back through review.
