@@ -1,0 +1,22 @@
+.venv/
+out/
+jobs/
+sample-job/
+.env
+receiver-config.json
+__pycache__/
+*.pyc
+.DS_Store
+
+# intake.py writes the live webhook token into these — never commit them
+SETUP-*.md
+receiver-block-*.json
+
+# generated from hub_page.py
+hub-page.html
+
+# Client configs carry licence numbers and compliance positions — per-client data, not code.
+# Real ones live in ~/.sonic/sonic-user/client-configs/ and reach the container via
+# CLIENT_CONFIG_<SLUG>. Only the example ships.
+clients/*.json
+!clients/example-co.json

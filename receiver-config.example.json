@@ -1,0 +1,14 @@
+{
+  "clients": {
+    "example-co": {
+      "secret": "CHANGE-ME-long-random-string",
+      "public_base_url": "https://your-tunnel.trycloudflare.com",
+      "notify_webhook": "https://services.leadconnectorhq.com/hooks/XXXX/webhook-trigger/YYYY",
+      "batch_window_seconds": 180,
+      "model": "claude-opus-5",
+      "crew_numbers": [
+        "+16315551234"
+      ]
+    }
+  }
+}

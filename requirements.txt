@@ -1,0 +1,5 @@
+anthropic>=0.125
+pillow>=11
+flask>=3
+requests>=2.31
+gunicorn>=21

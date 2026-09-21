@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: job-pages-receiver
+    runtime: docker
+    plan: starter          # NOT free — free instances sleep, and a sleeping
+                           # service silently drops GHL webhooks
+    healthCheckPath: /health
+    disk:
+      name: jobs
+      mountPath: /app/jobs # drafts survive restarts and redeploys
+      sizeGB: 1
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false        # set in the Render dashboard, never in the repo
+      - key: RECEIVER_CONFIG_JSON
+        sync: false        # paste receiver-config.json contents here

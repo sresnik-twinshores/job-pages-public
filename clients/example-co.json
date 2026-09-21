@@ -1,0 +1,72 @@
+{
+  "client_id": "example-co",
+  "business_name": "Example Home Services",
+  "site": "https://example.com",
+  "phone": "555-0100",
+  "provider": "ghl",
+  "_verify": "Services and towns must be discovered from the LIVE site by intake.py, not copied from a planning doc. Voice, compliance rules, forbidden areas and licences need a human \u2014 those carry legal weight.",
+  "voice": {
+    "summary": "TODO \u2014 plainspoken and specific, no marketing filler.",
+    "banned_style": [
+      "unlock",
+      "elevate",
+      "in today's world",
+      "nestled",
+      "boasts",
+      "seamless",
+      "game-changer",
+      "transform your home",
+      "look no further",
+      "when it comes to"
+    ],
+    "reading_level": "plain English, 7th-9th grade, short sentences, no filler"
+  },
+  "compliance_blocklist": [
+    {
+      "pattern": "(?i)\\btax credit\\b",
+      "reason": "TODO confirm \u2014 no tax-credit claims."
+    },
+    {
+      "pattern": "(?i)\\brebate",
+      "reason": "TODO confirm \u2014 no rebate amounts unverified."
+    }
+  ],
+  "service_area": {
+    "note": "Where the client may legally work. Separate from `towns`.",
+    "include_counties": [
+      "TODO County"
+    ],
+    "exclude_towns": [],
+    "exclude_names": [],
+    "exclude_reason": "TODO"
+  },
+  "forbidden_towns": {
+    "reason": "TODO",
+    "names": []
+  },
+  "licences": "TODO \u2014 licence numbers that must appear in advertising",
+  "quality_gate": {
+    "min_usable_photos": 2,
+    "min_body_words": 90,
+    "min_quality_score": 0.6,
+    "title_max_chars": 60,
+    "meta_max_chars": 155
+  },
+  "services": [
+    {
+      "slug": "example-service",
+      "label": "Example Service",
+      "url": "/services/example-service/",
+      "pillar": "/services/"
+    }
+  ],
+  "towns": [
+    {
+      "slug": "example-town",
+      "label": "Example Town",
+      "url": "/service-areas/example-town/",
+      "county": "TODO County"
+    }
+  ],
+  "town_aliases": {}
+}
