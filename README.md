@@ -91,3 +91,8 @@ A published page is revised by texting `UPDATE` and what changed. That builds a 
 carrying the live page's WordPress id, so the site keeps serving the approved version until
 somebody approves the replacement; approving rewrites that page in place, at the same URL,
 reusing unchanged photos. Nothing reaches live content without going back through review.
+
+## License
+
+MIT — see `LICENSE`. Use it, change it, ship it commercially; just keep the copyright
+notice. No warranty.
