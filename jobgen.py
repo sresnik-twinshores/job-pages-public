@@ -520,6 +520,13 @@ def run_guards(cfg: Dict[str, Any], page: Dict[str, Any], obs: Dict[str, Any],
     return issues
 
 
+def _place_name(cfg, page, town) -> str:
+    """"<Town>, <ST>" when the client config sets a region, otherwise just "<Town>"."""
+    name = (page.get("town_name") or town["label"]).strip()
+    region = (cfg.get("region") or "").strip()
+    return f"{name}, {region}" if region else name
+
+
 def verdict(issues: List[Dict[str, str]]) -> str:
     """INFO is informational only and never changes the outcome."""
     if any(i["level"] == "BLOCK" for i in issues):
@@ -538,8 +545,9 @@ def build_schema_org(cfg: Dict[str, Any], page: Dict[str, Any], town: Dict, svc:
         "serviceType": svc["label"],
         "provider": {"@type": "HomeAndConstructionBusiness", "name": cfg["business_name"],
                       "telephone": cfg["phone"], "url": cfg["site"]},
-        "areaServed": {"@type": "Place",
-                        "name": f'{page.get("town_name") or town["label"]}, NY'},
+        # State/province comes from the client config. There is no sensible default, so a
+        # config without "region" yields the bare town rather than a wrong state.
+        "areaServed": {"@type": "Place", "name": _place_name(cfg, page, town)},
         "description": page["meta_description"],
     }
 

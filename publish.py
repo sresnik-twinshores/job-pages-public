@@ -72,7 +72,7 @@ def find_or_create_parent(wp: Dict[str, Any], log=print) -> int:
         "title": wp.get("parent_title", "Recent Projects"),
         "slug": slug,
         "status": "publish",
-        "content": "<p>Recent work from our installation crews across Long Island.</p>",
+        "content": "<p>Recent work from our crews.</p>",
     })
     if r.status_code not in (200, 201):
         raise PublishError(f"could not create parent page: {r.status_code} {r.text[:300]}")

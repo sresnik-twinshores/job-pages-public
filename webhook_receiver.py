@@ -165,12 +165,18 @@ def extract(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # Twilio posts form-encoded: From, Body, NumMedia, MediaUrl0..N. GHL posts JSON with
     # whatever the workflow's raw body was mapped to. Accept both rather than branching here.
+    # GHL nests the workflow's mapped raw body under "customData" while also sending its
+    # own default contact payload at the top level. The mapped fields are therefore the
+    # LAST resort for phone/body/contact_id — the top-level ones are cleaner — but they are
+    # the ONLY place attachments appear, so a photo MMS parses as 0 media without this.
     phone = first("phone", "From", "from", "contact_phone", "contact.phone",
-                  "message.from", scalar=True)
+                  "message.from", "customData.phone", scalar=True)
     body = first("message.body", "Body", "body", "message_body", "sms_body", "message",
-                 scalar=True) or ""
-    contact_id = first("contact_id", "contactId", "id", "contact.id", scalar=True) or ""
-    media = first("attachments", "media", "message.attachments", "attachmentUrls", "media_urls")
+                 "customData.message", scalar=True) or ""
+    contact_id = first("contact_id", "contactId", "id", "contact.id",
+                       "customData.contact_id", scalar=True) or ""
+    media = first("attachments", "media", "message.attachments", "attachmentUrls",
+                  "media_urls", "customData.attachments")
 
     if not media:
         # Twilio numbers its media fields rather than sending a list
@@ -836,8 +842,22 @@ def inbound(client_id: str, path_token: str = ""):
         raw = request.get_data(as_text=True)[:4000]
         log(f"  ! body did not parse as JSON or form. Raw: {raw[:600]}")
 
+    msg = extract(payload)
+
+    # Identify the sender BEFORE recording anything. A misconfigured GHL trigger sends
+    # every inbound customer text here, and this endpoint used to dump the full payload to
+    # the volume and preview each field into the logs before deciding whose message it was.
+    # That put customers' message bodies and phone numbers on disk for people who are not
+    # part of this pipeline at all. The allowlist is the line: below it, nothing is stored.
+    allow = [norm_phone(p) for p in cc.get("crew_numbers", [])]
+    if allow and msg["phone"] and msg["phone"] not in allow:
+        log(f"ignoring message from non-crew number {msg['phone']}")
+        return jsonify({"ok": True, "ignored": "not a crew number"}), 200
+
     # Log the raw shape. GHL's field names vary by how the workflow action was mapped,
-    # and a silently-empty message or attachment list is otherwise invisible.
+    # and a silently-empty message or attachment list is otherwise invisible. A payload
+    # with no sender at all is the broken-mapping case this exists to debug, and it
+    # identifies nobody, so it is still recorded.
     try:
         RAW.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%H%M%S")
@@ -850,14 +870,8 @@ def inbound(client_id: str, path_token: str = ""):
     except Exception as e:
         log(f"  ! could not record raw payload: {e}")
 
-    msg = extract(payload)
     if not msg["phone"]:
         return jsonify({"ok": False, "reason": "no sender"}), 200
-
-    allow = [norm_phone(p) for p in cc.get("crew_numbers", [])]
-    if allow and msg["phone"] not in allow:
-        log(f"ignoring message from non-crew number {msg['phone']}")
-        return jsonify({"ok": True, "ignored": "not a crew number"}), 200
 
     key = f"{client_id}:{msg['phone']}"
     body = msg["body"]

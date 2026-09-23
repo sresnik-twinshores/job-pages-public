@@ -51,7 +51,7 @@ def nearby_places(lat: float, lon: float, limit: int = 8) -> List[str]:
 SCHEMA = {
     "type": "object",
     "properties": {
-        "title": {"type": "string", "description": "Page title, e.g. 'Windows, Doors & Siding in Yaphank, NY'"},
+        "title": {"type": "string", "description": "Page title naming the town and state, e.g. '<Services> in <Town>, <ST>'"},
         "meta_description": {"type": "string"},
         "intro": {"type": "string", "description": "2-3 sentences. What the company does in this town."},
         "local_context": {"type": "string",
