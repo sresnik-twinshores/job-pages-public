@@ -23,10 +23,15 @@ visible. Pass 2 writes the page from those facts **without seeing the images**, 
 embellish. Every claim on a page traces to a photo, the crew's own words, or the client
 config.
 
-**Town and service are JSON-schema enums.** An out-of-area job is *unrepresentable* rather
-than caught by a check that might not run. The trade-off is real and worth knowing: a town
-that is in the service area but missing from the client config silently blocks a legitimate
-job. Keep the town list complete.
+**Town and service are JSON-schema enums.** The model cannot invent a service the client
+does not offer, or link to a town page that does not exist.
+
+Worth being precise about what that does and does not mean. The `town` enum only chooses
+**which existing page to link to**; where the job actually happened is `town_name`, which is
+free text. So a job in a town with no page is **not blocked** — the copy names the real
+place, links to the nearest page, raises an `INFO` finding, and the review screen offers a
+one-click button to create the missing page. What blocks is `service_area.exclude_names`,
+checked against the text and against photo GPS.
 
 **Guards run in Python after generation**, independent of the model: compliance regex, geo
 rules, photo count, body length, quality score. Verdicts are `BLOCKED`, `HOLD-FOR-REVIEW`
@@ -47,11 +52,36 @@ they never read.
 | `hub_page.py` | `/projects/` grid + Leaflet map; serves `hub.js` / `town.js` / `hub.css` |
 | `intake.py` | Onboarding prober — probes a new client's site and writes their config |
 | `wsgi.py` | Gunicorn entrypoint. **One worker on purpose** — batch state is in-process |
+| `skill/` | The operating manual — onboarding, running it, and the silent failures |
 
 **Client configs are not in this repo.** They carry licence numbers and legal compliance
 positions, so they live in `~/.sonic/sonic-user/client-configs/<id>.json` and reach the
 container through a `CLIENT_CONFIG_<SLUG>` environment variable. Only
 `clients/example-co.json` ships. Secrets live in Railway environment variables only.
+
+## The skill — read this before deploying
+
+`skill/` holds the operating manual: an agent skill that walks an AI coding assistant
+through onboarding a client, running the pipeline day to day, and diagnosing the failures
+that give no error anywhere.
+
+```
+skill/SKILL.md              the three modes and the trap table
+skill/references/           onboarding, install, GHL, Twilio, client config,
+                            operating, theme integration, deploy ops, architecture
+skill/assets/               paste-ready GHL webhook body and workflow prompts
+```
+
+To use it with Claude Code, copy it in:
+
+```bash
+mkdir -p ~/.sonic/sonic-user/custom-skills
+cp -R skill ~/.sonic/sonic-user/custom-skills/job-pages
+```
+
+It is also worth reading on its own. Most of what will cost you hours is documented there
+and nowhere else — every trap in it was found by a text message silently producing nothing.
+Start with `skill/references/install.md`.
 
 ## SMS provider
 

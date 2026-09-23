@@ -1,0 +1,6 @@
+{
+  "phone": "{{contact.phone}}",
+  "message": "{{message.body}}",
+  "attachments": "{{message.attachments}}",
+  "contact_id": "{{contact.id}}"
+}
