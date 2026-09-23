@@ -9,7 +9,7 @@ config and a checklist of the steps only a human can do.
 
   python3 intake.py --client-id joes-hvac --site https://joeshvac.com \\
       --wp-user admin --wp-pass "xxxx xxxx xxxx xxxx" \\
-      --receiver https://job-pages-receiver-production.up.railway.app
+      --receiver https://<your-service>.up.railway.app
 
 Add --brand ../brand/BRAND-BRIEF.md to seed voice and compliance rules.
 """
@@ -321,6 +321,15 @@ enough detail; that is the gate working, not a failure.
     return p
 
 
+def _local_receiver() -> str:
+    """This machine's receiver URL, from the per-machine config written at install time."""
+    cfg = Path(os.path.expanduser("~/.sonic/sonic-user/job-pages.json"))
+    try:
+        return (json.loads(cfg.read_text()).get("receiver") or "").rstrip("/")
+    except Exception:
+        return ""
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--client-id", required=True)
@@ -330,9 +339,19 @@ def main() -> None:
     ap.add_argument("--wp-user", default="")
     ap.add_argument("--wp-pass", default="")
     ap.add_argument("--brand", default="")
-    ap.add_argument("--receiver", default="https://job-pages-receiver-production.up.railway.app")
+    # No hardcoded default. A baked-in URL silently wires a new client to whoever published
+    # this code — their key pays for the generations and the client's photos land on their
+    # volume. Read this machine's own receiver, and say so plainly if it is not set up yet.
+    ap.add_argument("--receiver", default=_local_receiver(),
+                    help="your receiver's base URL (defaults to the one in "
+                         "~/.sonic/sonic-user/job-pages.json)")
     ap.add_argument("--write", action="store_true", help="write the config files")
     a = ap.parse_args()
+
+    if not a.receiver:
+        ap.error("no receiver URL. Pass --receiver https://<your-service>.up.railway.app, or "
+                 "write ~/.sonic/sonic-user/job-pages.json first — see "
+                 "skill/references/install.md. Never point a client at someone else's receiver.")
 
     rep = Report()
     print(f"\nprobing {a.site}\n")

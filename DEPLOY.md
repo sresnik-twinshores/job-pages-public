@@ -4,12 +4,16 @@ One Railway service serves **every** client. Onboarding a client adds a config e
 two environment variables — not another deployment.
 
 Project `job-pages-receiver` · service `job-pages-receiver` · volume at `/app/jobs`
-Public URL: `https://job-pages-receiver-production.up.railway.app`
+Public URL: `https://<your-service>.up.railway.app`
+
+**Deploy your own service.** Never point a client at someone else's receiver: their API key
+would pay for your generations, and your clients' photos, configs and licence numbers would
+land on their volume. `skill/references/install.md` covers first-time setup.
 
 ## Deploy
 
 ```bash
-cd ~/Library/CloudStorage/Dropbox/Business/TSM/job-pages
+cd /path/to/job-pages
 railway up --service job-pages-receiver --ci
 ```
 
@@ -48,7 +52,7 @@ A redeploy takes roughly two minutes, during which the service returns 404.
 ## Verifying
 
 ```bash
-curl https://job-pages-receiver-production.up.railway.app/health
+curl https://<your-service>.up.railway.app/health
 # {"clients":["..."],"ok":true,"pending_batches":0}
 ```
 
