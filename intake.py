@@ -29,7 +29,7 @@ import requests
 HERE = Path(__file__).parent
 # Cloudflare 403s the default python-requests UA. Identify by name; override per agency.
 UA = os.environ.get(
-    "JOB_PAGES_UA", "JobPages/1.0 (+https://github.com/job-pages/job-pages)")
+    "JOB_PAGES_UA", "JobPages/1.0")   # set JOB_PAGES_UA to identify YOUR deployment to site owners
 TIMEOUT = 30
 OK, WARN, FAIL = "OK  ", "WARN", "FAIL"
 
@@ -205,6 +205,9 @@ def build_client_config(cid: str, site: str, biz: str, phone: str,
             "reason": "TODO — licensing or service-area limits. Leave names empty if none.",
             "names": [],
         },
+        # Two jobs: schema areaServed, and the map geocode. Without it a town name
+        # geocodes bare, so "Naples" can land in the wrong state entirely.
+        "region": "TODO — two-letter state, e.g. FL. No default; set it before going live.",
         "licences": "TODO — licence numbers that must appear in advertising",
         "quality_gate": {"min_usable_photos": 2, "min_body_words": 90,
                          "min_quality_score": 0.6, "title_max_chars": 60,

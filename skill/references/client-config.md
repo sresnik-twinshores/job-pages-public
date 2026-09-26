@@ -126,10 +126,20 @@ Test both directions before trusting a new rule.
 "region": "FL"
 ```
 
-The state or province, used in the Service schema's `areaServed` ("Cape Coral, FL").
+The state or province. It does two jobs:
+
+1. The Service schema's `areaServed` ("Cape Coral, FL").
+2. **The map geocode.** Town centroids are looked up as "<town>, <region>, USA".
+
+The second one is why a missing region is worse than it looks. Town names repeat across
+states — there is a Naples in both Florida and New York, a Portland in Oregon and Maine.
+Without a region the lookup is ambiguous, and until this was fixed the region was hardcoded
+to one state, which meant another client's pins landed there silently. No error, just a
+plausible pin in the wrong half of the country.
+
 There is no default: a config without `region` emits the bare town rather than guessing a
-state. Set it during onboarding — it is two characters and it is wrong on every page if
-it is missing or inherited from another client.
+state. Set it during onboarding — it is two characters and it is wrong on every page and
+every map pin if it is missing or inherited from another client.
 
 ## The quality gate
 

@@ -28,7 +28,7 @@ TIMEOUT = 45
 # User-Agent outright. Identify the integration by name instead.
 # Cloudflare 403s the default python-requests UA. Identify by name; override per agency.
 UA = os.environ.get(
-    "JOB_PAGES_UA", "JobPages/1.0 (+https://github.com/job-pages/job-pages)")
+    "JOB_PAGES_UA", "JobPages/1.0")   # set JOB_PAGES_UA to identify YOUR deployment to site owners
 
 
 def _headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:

@@ -149,7 +149,7 @@ def collect_photos(spec: List[str]) -> List[Path]:
 GEO_REV_CACHE = Path(__file__).parent / "jobs" / "_geo_rev.json"
 # Cloudflare 403s the default python-requests UA. Identify by name; override per agency.
 UA = os.environ.get(
-    "JOB_PAGES_UA", "JobPages/1.0 (+https://github.com/job-pages/job-pages)")
+    "JOB_PAGES_UA", "JobPages/1.0")   # set JOB_PAGES_UA to identify YOUR deployment to site owners
 
 
 def reverse_geocode(lat: float, lon: float, log=print) -> Optional[Dict[str, Any]]:

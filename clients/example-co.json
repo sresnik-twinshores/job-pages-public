@@ -2,6 +2,7 @@
   "client_id": "example-co",
   "business_name": "Example Home Services",
   "site": "https://example.com",
+  "region": "TODO \u2014 two-letter state, e.g. FL. Drives schema areaServed AND map geocoding. No default.",
   "phone": "555-0100",
   "provider": "ghl",
   "_verify": "Services and towns must be discovered from the LIVE site by intake.py, not copied from a planning doc. Voice, compliance rules, forbidden areas and licences need a human \u2014 those carry legal weight.",
