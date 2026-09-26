@@ -25,12 +25,28 @@ volume. Deploy your own.
 ```bash
 git clone https://github.com/sresnik-twinshores/job-pages-public.git ~/job-pages
 cd ~/job-pages
-cd ~/job-pages
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
 Python 3.10+ is preferred. On 3.9 pip resolves `anthropic` 0.x, which still supports the
 structured outputs this uses, so it works — but the container runs 3.12.
+
+### Keep the skill and the code together
+
+The skill ships **inside this repo**, at `skill/`. Install it from there:
+
+```bash
+cp -R ~/job-pages/skill/ ~/.sonic/sonic-user/custom-skills/job-pages/
+```
+
+To update, `git pull` and run that copy again.
+
+**This matters more than it looks.** The skill documents the code, so a skill from one
+version paired with code from another describes behaviour that no longer exists — and
+nothing warns you. A skill distributed separately drifted from the code within five days
+of being handed out, and the stale copy told people `region` only affected schema markup
+after it had started driving map placement too. Pulling both from the same repo is what
+keeps them honest.
 
 ## 2. Deploy your own Railway service
 

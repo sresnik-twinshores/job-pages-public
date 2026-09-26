@@ -214,10 +214,19 @@ def fetch_media(urls: List[str], dest: Path,
     if tw.get("account_sid"):
         # Twilio media URLs require the account credentials; GHL's are public-but-unguessable
         auth = (tw["account_sid"], os.environ.get(tw.get("auth_token_env", ""), ""))
+    # The client's own WordPress is a legitimate source: an email or form intake can upload
+    # photos to their media library and hand us those URLs. The host is taken from the client
+    # CONFIG, never from the payload, so this widens what we trust by exactly one host the
+    # operator already controls — it cannot be steered by an attacker-supplied body.
+    allow = list(MEDIA_HOST_ALLOW)
+    wp_host = (urlparse(((cc or {}).get("wordpress") or {}).get("base") or "").hostname or "").lower()
+    if wp_host:
+        allow.append(wp_host)
+
     for i, u in enumerate(urls[:MAX_MEDIA_PER_JOB]):
         try:
             host = (urlparse(u).hostname or "").lower()
-            if not any(host == h or host.endswith("." + h) for h in MEDIA_HOST_ALLOW):
+            if not any(host == h or host.endswith("." + h) for h in allow):
                 log(f"  ! refusing media from unapproved host: {host}")
                 continue
             r = requests.get(u, timeout=30, stream=True,
