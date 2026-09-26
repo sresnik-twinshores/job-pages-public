@@ -327,30 +327,47 @@ def notify(cc: Dict[str, Any], payload: Dict[str, Any]) -> None:
     provider = (cc.get("provider") or "ghl").lower()
     rep = cc.get("reply") or {}
     crew_id = payload.get("contact_id", "")
-    admin_id = rep.get("admin_contact_id") or crew_id
+
     # Identity is a contact id on GHL and a phone number on Twilio. Compare like for like,
     # or the "approver is also the crew member" case sends the follow-up question twice.
+    #
+    # More than one person can need the approval link - an owner and an office manager,
+    # say. The plural key wins; the singular one is still honoured so existing configs keep
+    # working. Whoever texted in is the fallback only when no admin is configured at all.
     if provider == "twilio":
         crew_ident = payload.get("phone", "")
-        admin_ident = rep.get("admin_number") or crew_ident
+        configured = rep.get("admin_numbers") or (
+            [rep["admin_number"]] if rep.get("admin_number") else [])
     else:
-        crew_ident, admin_ident = crew_id, admin_id
-    same_person = bool(crew_ident) and crew_ident == admin_ident
-    sent = False
+        crew_ident = crew_id
+        configured = rep.get("admin_contact_ids") or (
+            [rep["admin_contact_id"]] if rep.get("admin_contact_id") else [])
+
+    admins: List[str] = []
+    for a in configured:                      # de-dupe, keep configured order
+        if a and a not in admins:
+            admins.append(a)
+    if not admins and crew_ident:
+        admins = [crew_ident]
 
     body = payload.get("sms") or ""
-    if body and same_person and payload.get("followup"):
-        # same person wears both hats (and during testing), so don't drop the question
-        body = f"{body}\n\n{payload['followup']}"
-    if body:
-        if provider == "twilio":
-            to = rep.get("admin_number") or payload.get("phone", "")
-            sent = send_sms_twilio(cc, to, body)
-        else:
-            sent = send_sms_ghl(cc, admin_id, body)
-
     followup = payload.get("followup") or ""
-    if followup and rep.get("followup_to_crew", True) and not same_person and crew_ident:
+    sent = False
+
+    for a in admins:
+        b = body
+        if b and followup and a == crew_ident:
+            # this admin is also the person who texted in, so fold the question into their
+            # copy - otherwise the only person who can answer it never gets asked
+            b = f"{b}\n\n{followup}"
+        if b:
+            ok = (send_sms_twilio(cc, a, b) if provider == "twilio"
+                  else send_sms_ghl(cc, a, b))
+            sent = sent or ok
+    if len(admins) > 1:
+        log(f"  notified {len(admins)} approvers")
+
+    if followup and rep.get("followup_to_crew", True) and crew_ident and crew_ident not in admins:
         if provider == "twilio":
             send_sms_twilio(cc, crew_ident, followup)
         else:
@@ -988,25 +1005,33 @@ def approve(job_id: str):
 GEO_CACHE = JOBS / "_geo.json"
 
 
-def town_latlon(town_label: str) -> Optional[List[float]]:
+def town_latlon(town_label: str, region: str = "") -> Optional[List[float]]:
     """Town centroid, cached. Deliberately the TOWN, never the address - this map must not
-    plot customers' houses. Geocoded once per town via OpenStreetMap."""
+    plot customers' houses. Geocoded once per town via OpenStreetMap.
+
+    The region comes from the client config. It used to be a hardcoded "New York", which
+    silently put every other client's pins in the wrong state - a Florida town would match
+    a same-named New York one rather than fail visibly. No region means no region: a bare
+    town name geocodes imprecisely, which beats confidently wrong coordinates.
+    """
+    key = f"{town_label}|{region}" if region else town_label
     try:
         cache = json.loads(GEO_CACHE.read_text()) if GEO_CACHE.exists() else {}
     except Exception:
         cache = {}
-    if town_label in cache:
-        return cache[town_label]
+    if key in cache:
+        return cache[key]
+    q = f"{town_label}, {region}, USA" if region else f"{town_label}, USA"
     try:
         r = requests.get("https://nominatim.openstreetmap.org/search", timeout=20,
                          headers={"User-Agent": jobgen.UA},
-                         params={"q": f"{town_label}, New York, USA", "format": "json", "limit": 1})
+                         params={"q": q, "format": "json", "limit": 1})
         hits = r.json()
         pt = [round(float(hits[0]["lat"]), 5), round(float(hits[0]["lon"]), 5)] if hits else None
     except Exception as e:
-        log(f"  ! geocode failed for {town_label}: {e}")
+        log(f"  ! geocode failed for {q}: {e}")
         pt = None
-    cache[town_label] = pt
+    cache[key] = pt
     try:
         GEO_CACHE.write_text(json.dumps(cache))
     except Exception:
@@ -1018,7 +1043,9 @@ def town_latlon(town_label: str) -> Optional[List[float]]:
 def projects_feed(client_id: str):
     """Published jobs, for the /projects/ hub page to render. Public and read-only."""
     try:
-        towns = {t["slug"]: t for t in load_client_config(client_id)["towns"]}
+        _cfg = load_client_config(client_id)
+        towns = {t["slug"]: t for t in _cfg["towns"]}
+        cfg_region = (_cfg.get("region") or "").strip()
     except FileNotFoundError:
         abort(404)
 
@@ -1047,7 +1074,7 @@ def projects_feed(client_id: str):
             continue
         page = dr["page"]
         t = towns.get(page.get("town"), {})
-        pt = town_latlon(t.get("label", "")) if t else None
+        pt = town_latlon(t.get("label", ""), cfg_region) if t else None
         media = (wp.get("media") or [])
         items.append({
             "title": page["h1"],
