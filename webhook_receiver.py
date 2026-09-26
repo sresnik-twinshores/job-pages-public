@@ -229,7 +229,11 @@ def fetch_media(urls: List[str], dest: Path,
             if not any(host == h or host.endswith("." + h) for h in allow):
                 log(f"  ! refusing media from unapproved host: {host}")
                 continue
+            # A browser User-Agent, not requests' default. Client sites sit behind CDNs that
+            # answer "python-requests/x" with a 403 before the request reaches the origin —
+            # which reads as a permissions problem and is not one.
             r = requests.get(u, timeout=30, stream=True,
+                             headers={"User-Agent": jobgen.UA},
                              auth=auth if "twilio" in host else None)
             r.raise_for_status()
             ctype = (r.headers.get("content-type") or "").split(";")[0].strip()
