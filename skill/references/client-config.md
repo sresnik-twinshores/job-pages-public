@@ -146,6 +146,24 @@ Test both directions before trusting a new rule.
 
 ---
 
+### Seasonal rules
+
+A rule that only applies part of the year — a county fertilizer blackout, say — goes in
+`seasonal_blocklist` with the months it is active. Outside those months it is skipped, so
+legitimate spring and summer work still publishes:
+
+```json
+"seasonal_blocklist": [
+  {"pattern": "(?i)\\bfertiliz\\w*|\\bwinterizer\\b",
+   "months": [11, 12, 1, 2, 3],
+   "reason": "County bans lawn fertilizer Nov 1 - Apr 1."}
+]
+```
+
+The month is taken at generation time, which is within hours of the work. Mind the words
+that look alike: lime is a soil amendment, not a fertilizer, and "winterizing the
+irrigation" is a normal fall service — test both directions.
+
 ## `region`
 
 ```json

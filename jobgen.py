@@ -425,6 +425,17 @@ def run_guards(cfg: Dict[str, Any], page: Dict[str, Any], obs: Dict[str, Any],
             issues.append({"level": "BLOCK", "check": "compliance",
                            "detail": f'matched "{m.group(0).strip()}" — {rule["reason"]}'})
 
+    # Rules that only apply part of the year, e.g. a county fertilizer blackout. The job is
+    # generated within hours of the work, so today's month stands in for the job's month.
+    month = _dt.date.today().month
+    for rule in cfg.get("seasonal_blocklist", []):
+        if month not in rule["months"]:
+            continue
+        m = re.search(rule["pattern"], text_only)
+        if m:
+            issues.append({"level": "BLOCK", "check": "compliance-seasonal",
+                           "detail": f'matched "{m.group(0).strip()}" — {rule["reason"]}'})
+
     fb = cfg["forbidden_towns"]
     for name in fb["names"]:
         if re.search(r"\b" + re.escape(name) + r"\b", text_only, re.I):
