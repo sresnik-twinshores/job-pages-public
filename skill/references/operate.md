@@ -79,6 +79,21 @@ to…"* deliberately do not match — only `UPDATE`/`REVISE` at the start of a t
 The lookback is 60 days, against 6 hours for ordinary follow-up threading: a customer asking
 for a correction weeks later is the normal case.
 
+### Verify the first UPDATE on every client
+
+An UPDATE whose draft asked a follow-up question used to lose its `update_of`/`wp_page_id`
+when the answer regenerated it, so approval **created a new page** with a `-2` slug and the
+original stayed put. Fixed in `merge_followup()` (commit "Keep UPDATE metadata…"). Check the
+log on approval — it must say `updated:`, not `published:`:
+
+```
+[..] job <id> approved
+[..]   updated: https://<site>/?page_id=<SAME id as the original>
+```
+
+If it says `published:` with a new id, the receiver predates the fix: trash the duplicate,
+keep the better version, give it the original slug, and redeploy.
+
 ---
 
 ## Triage — a text produced no page

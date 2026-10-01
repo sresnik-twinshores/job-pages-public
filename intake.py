@@ -142,9 +142,15 @@ def classify(pages: List[Dict[str, Any]], rep: Report) -> Dict[str, List[Dict[st
                              "pillar": "/" + path.strip("/").split("/")[0] + "/"})
         elif slug in ("projects", "gallery", "service-areas"):
             hubs.append({"slug": slug, "url": path})
-    rep.add(OK if towns else WARN, f"{len(towns)} town pages found",
-            "" if towns else "no /service-areas/* pages — town enum will be empty")
-    rep.add(OK if services else WARN, f"{len(services)} service pages found")
+    # Both lists become schema enums. An empty enum is rejected by the API
+    # ("Enum must be a non-empty array"), so EVERY job fails until it is filled in.
+    rep.add(OK if towns else FAIL, f"{len(towns)} town pages found",
+            "" if towns else "no /service-areas/* pages — fill `towns` by hand before going "
+            "live (no town pages? point each service-area town at /projects/ — see "
+            "client-config.md)")
+    rep.add(OK if services else FAIL, f"{len(services)} service pages found",
+            "" if services else "none under /services/ etc. — the site may keep them at the "
+            "root; fill `services` by hand from the live pages before going live")
     rep.add(OK if any(h["slug"] == "projects" for h in hubs) else WARN,
             "/projects/ hub", "exists" if any(h["slug"] == "projects" for h in hubs)
             else "will be created on first publish")

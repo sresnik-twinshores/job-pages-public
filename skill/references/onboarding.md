@@ -55,6 +55,10 @@ guess — ask the operator, who asks the client.
 Diff the config against the live site (command in `client-config.md`). A missing town
 silently blocks a legitimate job; a slug with no page behind it creates a dead link.
 
+**`towns` and `services` must both be non-empty.** An empty list fails every job with
+`Enum must be a non-empty array`. A site with no town pages, or services at the root, needs
+them filled by hand — `client-config.md`, "A client with no town pages".
+
 ## Step 5 — Railway
 
 Add the client to `RECEIVER_CONFIG_JSON`, and set two variables **on the service**:

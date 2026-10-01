@@ -96,6 +96,32 @@ them — `"centerport": "huntington"`. The copy still names the hamlet.
 
 ---
 
+## A client with no town pages, or services at the site root
+
+`towns` and `services` are both schema enums, and **an empty enum is rejected by the API**:
+
+```
+output_config.format.schema: Invalid schema: Enum must be a non-empty array
+```
+
+Every job fails at pass 2 and the crew gets "something broke". Even past that, the geo
+guard BLOCKs any page whose town is not in the list. "A job in a town with no page is fine"
+only holds when the list has at least one entry.
+
+`intake.py` reports both as **blocking**. It only recognises `/service-areas/*` towns and
+`/windows/`, `/services/`-style service paths, so a site that keeps services at the root
+(`/lawn-care-maintenance/`) shows zero and needs them added by hand from the live pages.
+
+No town pages at all: list every service-area town and point it at the hub, which always
+exists after the first publish:
+
+```json
+{"slug": "mastic", "label": "Mastic", "url": "/projects/", "county": "Suffolk"}
+```
+
+Record why in a `_towns_note`, and swap each `url` for `/service-areas/<slug>/` when a real
+town page exists. First used on two-brothers (Divi, 19 towns, no town pages).
+
 ## Compliance
 
 ```json

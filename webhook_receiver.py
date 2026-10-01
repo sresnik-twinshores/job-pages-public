@@ -560,13 +560,17 @@ def merge_followup(cfg: Dict[str, Any], cc: Dict[str, Any], job_dir: Path,
     except Exception:
         pass
     tok = prev.get("approve_token") or uuid.uuid4().hex[:12]
+    # An UPDATE draft that asked a follow-up must stay an update. Dropping these made the
+    # approval create a second page instead of rewriting the live one.
+    update_meta = {k: prev[k] for k in ("update_of", "wp_page_id", "wp_url", "prior_media")
+                   if k in prev}
     (job_dir / "status.json").write_text(json.dumps(
         {"job_id": job_id, "client_id": inbound["client_id"], "phone": inbound["phone"],
          "verdict": r["verdict"], "state": "awaiting_approval",
          "approve_token": tok,
          "awaiting_answer": bool(page.get("followup_question")),
          "content_hash": r.get("content_hash", ""),
-         "headline": page["h1"], "link": link, "updated": True}, indent=2))
+         "headline": page["h1"], "link": link, "updated": True, **update_meta}, indent=2))
     log(f"  {r['verdict']}  quality {page['quality_score']}  ${r['cost_usd']:.3f}  (updated)")
 
     notify(cc, {"job_id": job_id, "phone": inbound["phone"], "contact_id": contact_id,

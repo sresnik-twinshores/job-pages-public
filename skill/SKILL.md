@@ -132,6 +132,10 @@ approves. `INFO` never changes the verdict.
 | Contact has DND on | `400 Cannot send message as DND is active for SMS` | `references/ghl-setup.md` |
 | Theme prints no `<h1>` | Job page publishes with no heading — the title is in the WP title field | `references/theme-integration.md` |
 | `region` unset in the config | Schema says the wrong state, or none | `references/client-config.md` |
+| Client has no town pages (or services at the site root) | Every job fails: `Enum must be a non-empty array`. Intake now reports it as blocking | `references/client-config.md` |
+| UPDATE that asked a follow-up | Approval created a **second page** (`…-2` slug) instead of rewriting the live one. Fixed in code; verify after the first UPDATE | `references/operate.md` |
+| `DONE` sent right after the last text | GHL can deliver it **first**: an empty job fires, the crew gets "send photos", the real text waits out the window | `references/ghl-setup.md` |
+| GHL webhook action "won't save without test data" | Either the wrong piece (Inbound Webhook *trigger*) or the Custom Webhook test — pick any crew contact | `references/ghl-setup.md` |
 
 ### If GHL is involved, assume it will fail silently
 

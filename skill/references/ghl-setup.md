@@ -73,6 +73,13 @@ queued ... 1 text(s), 0 media
 the attachments are present and were still counted as 0, which means the receiver predates
 the `customData` fallback. Update it rather than rebuilding the workflow.
 
+**"It won't save the webhook without test data."** Two causes. If the screen offers a
+`services.leadconnectorhq.com/hooks/…` URL and a *Mapping Reference*, that is the **Inbound
+Webhook trigger** — the wrong piece; delete it and use the inbound-message trigger plus a
+Webhook *action*. If it is the Custom Webhook action asking for a test contact, pick any crew
+contact and run it: the receiver logs `0 text(s), 0 media` for that hit and fires a harmless
+empty job. Real values only exist when a real text triggers the workflow.
+
 **Optional** — an `Add Tag: crew` action keeps installers out of marketing campaigns. Note
 that inbound SMS from an unknown number creates a contact, so without a tag your crews
 become leads.
@@ -178,6 +185,10 @@ host changed. A traceback means a code bug — the job is recovered on next boot
 | `DONE` | Fires the batch now instead of waiting out the window |
 | `PUBLISH` / `OK` | Publishes the most recent READY draft — **approvers only** |
 | `UPDATE …` | Revises the most recent **published** page from that number (see below) |
+
+**Tell crews to wait ~10 seconds before `DONE`.** GHL does not guarantee order. A `DONE`
+that overtakes the last text closes an empty batch: the crew gets a "send some photos" text,
+and the real text then waits out the full window. Nothing is lost, but it looks broken.
 
 A photo-less text that is not a keyword is treated as an answer to a held draft. If the
 receiver is not confident it asks: *"Is that about X? Reply Y to add it, or N for a new job."*
