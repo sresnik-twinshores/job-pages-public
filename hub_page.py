@@ -24,8 +24,8 @@ PAGE_HTML = """<!-- wp:html -->
 </div>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="__BASE__/hub/__CLIENT__/hub.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="__BASE__/hub/__CLIENT__/hub.js"></script>
+<script data-no-optimize="1" data-no-defer="1" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script data-no-optimize="1" data-no-defer="1" src="__BASE__/hub/__CLIENT__/hub.js"></script>
 <!-- /wp:html -->"""
 
 HUB_CSS = """:root{--jp-line:#e3e3e3}
@@ -55,7 +55,13 @@ HUB_JS = """(function () {
 
   fetch(FEED).then(function (r) { return r.json(); }).then(function (d) {
     var items = (d.projects || []).filter(function (p) { return p.url; });
-    if (!items.length) { empty.hidden = false; return; }
+    if (!items.length) {
+      // a brand-new hub has no jobs yet: an empty bordered map box reads as broken
+      var m = document.getElementById('jp-map');
+      if (m) m.style.display = 'none';
+      empty.hidden = false;
+      return;
+    }
 
     items.forEach(function (p) {
       var li = document.createElement('li');
