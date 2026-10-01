@@ -164,10 +164,13 @@ reach the hand-built pages:
 
 ```css
 .jp-page figure, .jp-page .wp-block-image{margin:2rem 0}
-.jp-page figure img{width:100%;border-radius:14px}
+.jp-page figure img{display:block;width:auto;max-width:100%;max-height:640px;margin:0 auto;border-radius:14px}
 .jp-page figcaption{margin-top:.6rem;font-size:.92rem;opacity:.8}
 .jp-page h1{font-size:clamp(1.9rem,2.6vw + 1rem,2.9rem);text-transform:none}
 ```
+
+Cap the height: crew photos are portrait phone shots, and at `width:100%` each one is
+~1,150px tall — three of them make a page that is almost all scroll.
 
 That last rule matters more than it looks: a hero-scale uppercase `h1` turns a headline
 like "Mitsubishi 18,000 BTU Mini Split" into shouting, and product names read badly in caps.
