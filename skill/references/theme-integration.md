@@ -181,6 +181,37 @@ templates ignore post content.
 
 ---
 
+## Divi + LiteSpeed sites
+
+Divi's default page template already prints the post title as `<h1 class="entry-title">` and
+wraps content in `.container`, so §2b needs no template edit. What it does add:
+
+- **A right sidebar** (often just a search widget) on every non-builder page — the hub and
+  every job page. There is no REST field for Divi's per-page layout (`_et_pb_page_layout` is
+  not exposed). Hide it with CSS scoped to the hub and its children, which covers every
+  future job page with no per-page work:
+
+  ```css
+  .page-id-<HUB> #sidebar, .parent-pageid-<HUB> #sidebar { display: none; }
+  .page-id-<HUB> #left-area, .parent-pageid-<HUB> #left-area { width: 100%; padding-right: 0; float: none; }
+  .page-id-<HUB> #main-content .container:before,
+  .parent-pageid-<HUB> #main-content .container:before { display: none; }
+  ```
+
+  It goes in **Divi → Theme Options → General → Custom CSS**. Not reachable over REST. Save
+  with the panel's own `#epanel-save` button — the green "Save Changes" above the panel can
+  report success without persisting. Reload and confirm the block is there. Wrap the
+  addition in start/end comments so it can be removed cleanly.
+- **The footer is a Theme Builder layout**, shared across templates and only editable in
+  the visual builder. Have the operator add the `/projects/` link by hand rather than
+  automating the builder.
+
+**LiteSpeed Cache** rewrites scripts to `type="litespeed/javascript"` (load on first user
+interaction), so the hub map would not appear until someone scrolls. `hub_page.py` now emits
+`data-no-optimize="1" data-no-defer="1"`, which LiteSpeed honours. Saving Divi theme options
+or a page through REST triggers LiteSpeed's own purge, so no manual purge was needed — still
+verify on a plain URL.
+
 ## Working on a theme over FTPS
 
 Where a host blocks zip installs and `functions.php` writes, FTPS is the way in.
