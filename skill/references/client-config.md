@@ -120,7 +120,7 @@ exists after the first publish:
 ```
 
 Record why in a `_towns_note`, and swap each `url` for `/service-areas/<slug>/` when a real
-town page exists. First used on two-brothers (Divi, 19 towns, no town pages).
+town page exists.
 
 ## Compliance
 
