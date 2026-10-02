@@ -15,6 +15,10 @@ receiver-block-*.json
 # generated from hub_page.py
 hub-page.html
 
+# golden harness scratch dirs (tools/golden.py)
+tests/golden/_work/
+tests/golden/_verify/
+
 # Client configs carry licence numbers and compliance positions — per-client data, not code.
 # Real ones live in ~/.sonic/sonic-user/client-configs/ and reach the container via
 # CLIENT_CONFIG_<SLUG>. Only the example ships.
