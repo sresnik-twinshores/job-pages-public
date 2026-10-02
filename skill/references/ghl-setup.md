@@ -200,3 +200,13 @@ receiver is not confident it asks: *"Is that about X? Reply Y to add it, or N fo
 Every number in `crew_numbers` can cause pages to be created on a client's live site, and
 every number in `approver_numbers` can publish them. Keep both lists to real mobiles, and
 do not add the intake number itself — a number does not text itself.
+
+**Adding an approver is two entries, not one.** On GHL the draft link is sent to contact
+ids — `reply.admin_contact_ids` — while `approver_numbers` only controls who may text
+`PUBLISH`. A number added to `approver_numbers` alone can approve but never receives a
+link, and nothing errors. Add the person's GHL contact id to `admin_contact_ids` too.
+
+**The contact must carry the phone in the main Phone field.** Sending to a contact without
+one fails with `422 Missing phone number`. A business line often already belongs to
+another contact, and GHL's duplicate protection will quietly refuse to put it on a second
+one — search the number and use the contact that already owns it.
