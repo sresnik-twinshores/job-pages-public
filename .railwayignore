@@ -1,4 +1,4 @@
-.venv/
+﻿.venv/
 out/
 jobs/
 sample-job/
@@ -8,3 +8,7 @@ __pycache__/
 *.pyc
 .DS_Store
 .git/
+tests/
+skill/
+sops/
+/*.md

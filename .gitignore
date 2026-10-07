@@ -24,3 +24,4 @@ tests/golden/_verify/
 # CLIENT_CONFIG_<SLUG>. Only the example ships.
 clients/*.json
 !clients/example-co.json
+tools/ghl-oauth-spike/state/

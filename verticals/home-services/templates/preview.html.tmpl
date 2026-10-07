@@ -1,0 +1,115 @@
+<!doctype html><meta charset="utf-8">
+<title>Job page draft — {{h1_esc}}</title>
+<style>
+ body{font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:860px;margin:0 auto;padding:24px;color:#1a1a1a}
+ .verdict{background:{{verdict_colour}};color:#fff;padding:12px 16px;border-radius:8px;font-weight:600}
+ .serp{border:1px solid #ddd;border-radius:8px;padding:14px;margin:18px 0;background:#fafafa}
+ .serp .t{color:#1a0dab;font-size:19px} .serp .u{color:#0b7d2f;font-size:13px} .serp .d{color:#4d5156;font-size:14px}
+ table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px}
+ td,th{border:1px solid #e3e3e3;padding:7px 9px;text-align:left;vertical-align:top}
+ .lv{font-weight:700;white-space:nowrap} .BLOCK{color:#b3261e} .HOLD{color:#8a6100} .WARN{color:#666} .INFO{color:#1a6b34}
+ figure{margin:0 0 18px} img{max-width:100%;border-radius:8px;display:block}
+ figcaption{font-size:14px;color:#444;padding-top:6px}
+ .alt{display:block;color:#888;font-size:12px;font-family:ui-monospace,monospace}
+ .src{font-size:11px;background:#eee;padding:1px 6px;border-radius:9px;color:#555}
+ .page{border:2px dashed #ccd;padding:20px;border-radius:10px;margin:18px 0}
+ h1{font-size:27px;line-height:1.25} pre{background:#f6f6f6;padding:12px;border-radius:8px;overflow:auto;font-size:12px}
+ .meta{color:#666;font-size:13px}
+</style>
+<div class="verdict">{{verdict}} &nbsp;·&nbsp; quality {{quality}} &nbsp;·&nbsp; {{usage_note}}</div>
+
+<div id="approve-bar" style="display:none;margin:16px 0;padding:14px;border:1px solid #d7d7d7;border-radius:10px;background:#fff">
+ <button id="approve-btn" style="background:#1a6b34;color:#fff;border:0;padding:12px 22px;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer">Approve &amp; publish</button>
+ <button id="town-btn" style="display:none;background:#fff;color:#1a6b34;border:1.5px solid #1a6b34;padding:12px 18px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;margin-left:10px"></button>
+ <span id="approve-msg" style="margin-left:14px;color:#444"></span>
+</div>
+<script>
+(function () {
+  var t = new URLSearchParams(location.search).get('t');
+  if (!t) return;                               // no token, no buttons
+  var H = '{{content_hash}}';                     // the version being looked at
+  var bar = document.getElementById('approve-bar');
+  var btn = document.getElementById('approve-btn');
+  var msg = document.getElementById('approve-msg');
+  bar.style.display = 'block';
+
+  // Offer the town page only when this job flagged one as missing.
+  var NEEDS_TOWN = {{needs_town}};
+  var TOWN_NAME = "{{town_name_js}}";
+  var tbtn = document.getElementById('town-btn');
+  if (NEEDS_TOWN && TOWN_NAME) {
+    tbtn.textContent = 'Create ' + TOWN_NAME + ' service-area page';
+    tbtn.style.display = 'inline-block';
+    tbtn.addEventListener('click', function () {
+      tbtn.disabled = true; msg.textContent = 'Writing the ' + TOWN_NAME + ' page…';
+      fetch('new-town?t=' + encodeURIComponent(t), {method: 'POST'})
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok) {
+            msg.innerHTML = 'Created as a draft. <a href="' + d.url + '" target="_blank">Open it</a>'
+              + (d.verify && d.verify.length ? ' — ' + d.verify.length + ' detail(s) to verify.' : '');
+          } else {
+            msg.textContent = 'Failed: ' + (d.reason || 'unknown'); tbtn.disabled = false;
+          }
+        })
+        .catch(function (e) { msg.textContent = 'Failed: ' + e; tbtn.disabled = false; });
+    });
+  }
+  // A BLOCK is a guard's opinion, and guards have false positives. The reviewer who
+  // has read the page and the matched rule can override - explicitly, never silently.
+  var BLOCKED = '{{verdict}}' === 'BLOCKED';
+  if (BLOCKED) {
+    btn.textContent = 'Publish anyway — override the block';
+    btn.style.background = '#b3261e';
+  }
+  btn.addEventListener('click', function () {
+    if (BLOCKED && !confirm('The checks BLOCKED this draft (see the table below). '
+        + 'Publish it anyway? This is recorded.')) return;
+    btn.disabled = true; msg.textContent = 'Publishing…';
+    fetch('approve?t=' + encodeURIComponent(t) + '&h=' + encodeURIComponent(H)
+          + (BLOCKED ? '&force=1' : ''), {method: 'POST'})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) {
+          msg.innerHTML = d.url
+            ? 'Published as a WordPress draft. <a href="' + d.url + '" target="_blank">Open in WordPress</a>'
+            : 'Approved.';
+        } else {
+          if (d.reason === 'stale') {
+            msg.innerHTML = 'This draft changed after you opened it. '
+              + '<a href="">Reload</a> and review the new version before publishing.';
+          } else {
+            msg.textContent = 'Failed: ' + (d.error || d.reason || 'unknown');
+            btn.disabled = false;
+          }
+        }
+      })
+      .catch(function (e) { msg.textContent = 'Failed: ' + e; btn.disabled = false; });
+  });
+})();
+</script>
+
+<h2>As it would appear in search</h2>
+<div class="serp">
+ <div class="t">{{title_tag_esc}}</div>
+ <div class="u">{{site}}/projects/{{slug_esc}}/</div>
+ <div class="d">{{meta_esc}}</div>
+</div>
+
+<h2>Checks</h2>
+<table><tr><th>level</th><th>check</th><th>detail</th></tr>{{rows}}</table>
+
+<h2>The page</h2>
+<div class="page">
+ <p class="meta">{{town_label_esc}} · {{service_esc}}</p>
+ <h1>{{h1_esc}}</h1>
+ {{body_html}}
+ {{figs}}
+ <p class="meta">Links: {{links_line}}</p>
+</div>
+
+<h2>Where every claim came from</h2><ul>{{facts}}</ul>
+<h2>What the crew did not tell us</h2><ul>{{missing}}</ul>
+<h2>Follow-up text to send</h2>
+<p>{{followup_esc}}</p>
+<h2>Schema</h2><pre>{{schema_org_esc}}</pre>

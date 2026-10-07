@@ -1,0 +1,94 @@
+{
+  "type": "object",
+  "properties": {
+    "photos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "shot_type": {
+            "type": "string",
+            "enum": [
+              "before",
+              "after",
+              "during",
+              "detail",
+              "unclear"
+            ]
+          },
+          "subject": {
+            "type": "string",
+            "enum": [
+              "window",
+              "door",
+              "siding",
+              "trim",
+              "interior",
+              "exterior",
+              "other"
+            ]
+          },
+          "visible": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Only what is literally visible. No inference about brand, price, or performance."
+          },
+          "product_description": {
+            "type": "string",
+            "description": "Plain description of the product shown, e.g. 'white vinyl double-hung with colonial grids'. Empty string if not determinable."
+          },
+          "count_visible": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Number of units clearly countable in this photo, else null."
+          },
+          "usable": {
+            "type": "boolean",
+            "description": "Sharp, well-lit and relevant enough to publish."
+          },
+          "quality_notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "shot_type",
+          "subject",
+          "visible",
+          "product_description",
+          "count_visible",
+          "usable",
+          "quality_notes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "overall_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Facts supported across photos."
+    },
+    "cannot_determine": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Things a reader would want that the photos do NOT show."
+    }
+  },
+  "required": [
+    "photos",
+    "overall_evidence",
+    "cannot_determine"
+  ],
+  "additionalProperties": false
+}

@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+import vertical
+
 HERE = Path(__file__).parent
 # Cloudflare 403s the default python-requests UA. Identify by name; override per agency.
 UA = os.environ.get(
@@ -182,6 +184,9 @@ def build_client_config(cid: str, site: str, biz: str, phone: str,
                         found: Dict[str, Any], brand: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "client_id": cid,
+        # Which vertical pack this client runs on — pinned by version so a pack
+        # update never silently changes a live client. See verticals/.
+        "vertical": "home-services@1",
         "business_name": biz,
         "site": site.rstrip("/"),
         "phone": phone,
@@ -199,7 +204,7 @@ def build_client_config(cid: str, site: str, biz: str, phone: str,
             {"pattern": "(?i)\\btax credit\\b|federal credit",
              "reason": "TODO confirm — no tax-credit claims without written verification."},
             {"pattern": "(?i)\\brebate", "reason": "TODO confirm — no rebate amounts unverified."},
-            {"pattern": "(?i)\\$\\s?\\d+\\s?(/|per\\s)\\s?mo|0%|APR|financ",
+            {"pattern": "(?i)\\$\\s?\\d+\\s?(/|per\\s)\\s?mo|0%|\\bAPR\\b|financ",
              "reason": "TODO confirm — financing figures need a TILA/Reg-Z block."},
             {"pattern": "(?i)\\bwe manufacture|our factory",
              "reason": "TODO confirm — only if the client is not the manufacturer."},
@@ -373,6 +378,21 @@ def main() -> None:
     cfg = build_client_config(a.client_id, a.site,
                               a.business_name or site.get("name", a.client_id),
                               a.phone, found, brand)
+
+    # The receiver refuses to boot on a config that fails its vertical pack, so run
+    # the same validation now — a problem named here costs a config edit, not a
+    # failed deploy. WARN not FAIL: a fresh config legitimately carries TODOs.
+    try:
+        pack = vertical.pack_for(cfg, log=lambda *_a, **_k: None)
+        boot_problems = vertical.validate_client(cfg, pack)
+    except vertical.PackError as e:
+        boot_problems = [str(e)]
+    if boot_problems:
+        for pr in boot_problems:
+            rep.add(WARN, "boot validation", pr)
+    else:
+        rep.add(OK, "boot validation", f"config boots on {cfg['vertical']}")
+
     block = build_receiver_block(a.client_id, a.site, a.receiver)
 
     print(f"\n  {rep.blocking} blocking issue(s)\n")

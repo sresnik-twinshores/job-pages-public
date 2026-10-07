@@ -1,0 +1,4 @@
+{
+  "_comment": "Pack-level compliance FLOOR. These rules apply to every client on this vertical and a client config can add to them but never remove them. Home-services compliance is client-specific (licence wording, discontinued services, financing rules), so this floor ships empty — contrast with verticals whose law is universal (e.g. Fair Housing for real estate), where the floor is the point.",
+  "blocklist": []
+}

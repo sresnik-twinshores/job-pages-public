@@ -4,7 +4,8 @@ WORKDIR /app
 RUN pip install --no-cache-dir --upgrade pip
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY jobgen.py webhook_receiver.py publish.py hub_page.py townpage.py wsgi.py ./
+COPY jobgen.py webhook_receiver.py publish.py hub_page.py townpage.py vertical.py wsgi.py ./
+COPY verticals/ ./verticals/
 COPY clients/ ./clients/
 
 ENV PYTHONUNBUFFERED=1

@@ -1,0 +1,17 @@
+<p>{{intro}}</p>
+
+<p>{{local_context}}</p>
+
+<h2>What we install in {{area_name}}</h2>
+<p>{{services_line}}</p>
+<ul>{{links}}</ul>
+{{licences_block}}
+
+<!-- job-pages: recent work in this town, filled from the live feed -->
+<section class="section jp-town-projects" data-jp-town="{{area_name}}" hidden>
+  <h2>Recent projects in {{area_name}}</h2>
+  <ul class="jp-grid"></ul>
+  <p class="jp-town-all"><a href="{{site}}/projects/">See all recent projects</a></p>
+</section>
+<link rel="stylesheet" href="{{receiver}}/hub/{{client_id}}/hub.css">
+<script src="{{receiver}}/hub/{{client_id}}/town.js" defer></script>

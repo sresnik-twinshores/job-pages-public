@@ -1,0 +1,17 @@
+{
+  "@context": "https://schema.org",
+  "@type": "Service",
+  "name": "$page.h1",
+  "serviceType": "$service.label",
+  "provider": {
+    "@type": "HomeAndConstructionBusiness",
+    "name": "$client.business_name",
+    "telephone": "$client.phone",
+    "url": "$client.site"
+  },
+  "areaServed": {
+    "@type": "Place",
+    "name": "$computed.place_name"
+  },
+  "description": "$page.meta_description"
+}

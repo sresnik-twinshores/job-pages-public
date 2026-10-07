@@ -1,0 +1,150 @@
+{
+  "type": "object",
+  "properties": {
+    "service": {
+      "type": "string",
+      "enum": "$client.service_slugs"
+    },
+    "town": {
+      "type": "string",
+      "enum": "$client.town_slugs"
+    },
+    "town_name": {
+      "type": "string",
+      "description": "The real town or hamlet the job was in, as it should read on the page. Often the same as the town page; use the true name when it differs."
+    },
+    "service_confidence": {
+      "type": "number"
+    },
+    "town_confidence": {
+      "type": "number"
+    },
+    "h1": {
+      "type": "string"
+    },
+    "title_tag": {
+      "type": "string"
+    },
+    "meta_description": {
+      "type": "string"
+    },
+    "slug": {
+      "type": "string"
+    },
+    "body_html": {
+      "type": "string",
+      "description": "2-4 short <p> paragraphs, optional one <h2>. No inline styles, no headings above h2."
+    },
+    "photos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "caption": {
+            "type": "string"
+          },
+          "alt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "caption",
+          "alt"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "internal_links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "anchor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "anchor"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "facts_used": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fact": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "photo",
+              "crew_text",
+              "gps",
+              "client_config"
+            ]
+          }
+        },
+        "required": [
+          "fact",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Every substantive claim in the page and where it came from."
+    },
+    "missing_info": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "followup_question": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "One SMS-length question that would most improve the page, or null."
+    },
+    "compliance_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "quality_score": {
+      "type": "number",
+      "description": "0-1. Be harsh: thin input means a low score."
+    }
+  },
+  "required": [
+    "service",
+    "town",
+    "town_name",
+    "service_confidence",
+    "town_confidence",
+    "h1",
+    "title_tag",
+    "meta_description",
+    "slug",
+    "body_html",
+    "photos",
+    "internal_links",
+    "facts_used",
+    "missing_info",
+    "followup_question",
+    "compliance_flags",
+    "quality_score"
+  ],
+  "additionalProperties": false
+}

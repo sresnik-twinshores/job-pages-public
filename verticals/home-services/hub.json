@@ -1,0 +1,10 @@
+{
+  "_comment": "Hub + area-page wiring for this vertical. `slug` is the default parent the pages publish under (a client's wordpress.parent_slug overrides). `feed_key` is the array key in the public JSON feed — hub.js and town.js read it, so it is part of the deployed-theme contract.",
+  "slug": "projects",
+  "parent_title": "Recent Projects",
+  "parent_content": "<p>Recent work from our crews.</p>",
+  "feed_key": "projects",
+  "area_parent_slug": "service-areas",
+  "map_aria_label": "Map of recent project locations",
+  "empty_text": "Recent projects will appear here."
+}

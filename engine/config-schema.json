@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Client config (~/.sonic/sonic-user/client-configs/<id>.json)",
+  "description": "Engine-level shape of a client config. A pack's required_intake_fields narrows which of these must be present; validate_client() in vertical.py is the runtime enforcement. This document exists for the future setup frontend — the UI form is generated from this plus the selected pack's manifest.",
+  "type": "object",
+  "required": ["client_id", "business_name", "site"],
+  "properties": {
+    "client_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "vertical": {
+      "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*@[0-9]+$",
+      "description": "Pack reference, version-pinned (e.g. home-services@1). Optional during the Phase 1 grace period (defaults to home-services@1 with a warning); required from Phase 2."
+    },
+    "business_name": {"type": "string"},
+    "site": {"type": "string", "format": "uri"},
+    "phone": {"type": "string"},
+    "region": {
+      "type": "string",
+      "description": "Two-letter state/province. Drives schema areaServed AND map geocoding. No default — a missing region yields bare place names rather than a wrong state."
+    },
+    "provider": {"type": "string", "enum": ["ghl", "twilio"]},
+    "voice": {
+      "type": "object",
+      "required": ["summary", "banned_style", "reading_level"],
+      "properties": {
+        "summary": {"type": "string"},
+        "banned_style": {"type": "array", "items": {"type": "string"}},
+        "reading_level": {"type": "string"}
+      }
+    },
+    "compliance_blocklist": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "reason"],
+        "properties": {"pattern": {"type": "string"}, "reason": {"type": "string"}}
+      },
+      "description": "Client-specific rules, applied on top of the pack's compliance floor."
+    },
+    "seasonal_blocklist": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "months", "reason"],
+        "properties": {
+          "pattern": {"type": "string"},
+          "months": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 12}},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "forbidden_towns": {
+      "type": "object",
+      "required": ["reason", "names"],
+      "properties": {"reason": {"type": "string"}, "names": {"type": "array", "items": {"type": "string"}}}
+    },
+    "service_area": {
+      "type": "object",
+      "properties": {
+        "include_counties": {"type": "array", "items": {"type": "string"}},
+        "exclude_towns": {"type": "array", "items": {"type": "string"}},
+        "exclude_names": {
+          "type": "array", "items": {"type": "string"},
+          "description": "What the geo guard actually matches on. An empty list blocks nothing — say why in exclude_reason."
+        },
+        "exclude_reason": {"type": "string"}
+      }
+    },
+    "licences": {"type": "string"},
+    "quality_gate": {
+      "type": "object",
+      "required": ["min_usable_photos", "min_body_words", "min_quality_score", "title_max_chars", "meta_max_chars"],
+      "properties": {
+        "min_usable_photos": {"type": "integer"},
+        "min_body_words": {"type": "integer"},
+        "min_quality_score": {"type": "number"},
+        "title_max_chars": {"type": "integer"},
+        "meta_max_chars": {"type": "integer"}
+      }
+    },
+    "services": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["slug", "label", "url", "pillar"],
+        "properties": {
+          "slug": {"type": "string"}, "label": {"type": "string"},
+          "url": {"type": "string"}, "pillar": {"type": "string"}
+        }
+      }
+    },
+    "towns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["slug", "label", "url"],
+        "properties": {
+          "slug": {"type": "string"}, "label": {"type": "string"},
+          "url": {"type": "string"}, "county": {"type": "string"}
+        }
+      }
+    },
+    "town_aliases": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    }
+  }
+}

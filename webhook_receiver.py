@@ -3,13 +3,13 @@
 webhook_receiver.py — GHL inbound MMS -> batched -> job page draft -> reply link.
 
 Flow
-  1. Crew texts photos + a sentence to the client's GHL number.
+  1. A field sender texts photos + a sentence to the client's GHL number.
   2. A GHL workflow (Inbound Message trigger -> Webhook action) POSTs here per message.
-  3. Messages from the same crew number are BATCHED — carriers split MMS, so four photos
+  3. Messages from the same sender number are BATCHED — carriers split MMS, so four photos
      usually arrive as four separate webhooks. We wait for a quiet gap before generating.
   4. jobgen.generate_job() writes the draft.
-  5. We POST to the client's GHL Inbound Webhook URL; that workflow texts the crew a link.
-  6. Crew (or Scott) opens the link and approves.
+  5. We POST to the client's GHL Inbound Webhook URL; that workflow texts the sender a link.
+  6. The sender (or an admin) opens the link and approves.
 
 Run:  .venv/bin/python webhook_receiver.py --config receiver-config.json
 Then expose it:  cloudflared tunnel --url http://localhost:8787
@@ -38,6 +38,7 @@ import jobgen
 import publish as wp_publish
 import hub_page
 import townpage
+import vertical
 
 HERE = Path(__file__).parent
 app = Flask(__name__)
@@ -109,7 +110,9 @@ def load_client_config(client_id: str) -> Dict[str, Any]:
         return json.loads(raw)
     for p in (CLIENT_CONFIG_DIR / f"{client_id}.json", HERE / "clients" / f"{client_id}.json"):
         if p.exists():
-            return json.loads(p.read_text())
+            # Explicit UTF-8: configs carry licence lines and voice text with
+            # non-ASCII characters, and Windows otherwise decodes them as cp1252.
+            return json.loads(p.read_text(encoding="utf-8"))
     raise FileNotFoundError(
         f"no config for client {client_id!r} — set {_client_env_name(client_id)} "
         f"or place {client_id}.json in {CLIENT_CONFIG_DIR}")
@@ -222,6 +225,11 @@ def fetch_media(urls: List[str], dest: Path,
     wp_host = (urlparse(((cc or {}).get("wordpress") or {}).get("base") or "").hostname or "").lower()
     if wp_host:
         allow.append(wp_host)
+    # Agencies white-label GHL, so conversation assets arrive from their own
+    # domain (e.g. link.<agency>.com) instead of the stock CDNs above. Same
+    # trust argument as the WordPress host: the value comes from the client
+    # CONFIG the operator wrote, never from the payload.
+    allow.extend(h.lower() for h in (cc or {}).get("media_host_allow", []))
 
     for i, u in enumerate(urls[:MAX_MEDIA_PER_JOB]):
         try:
@@ -307,7 +315,7 @@ def send_sms_ghl(cc: Dict[str, Any], contact_id: str, text: str) -> bool:
     try:
         body = {"type": "SMS", "contactId": contact_id, "message": text}
         # Without fromNumber GHL picks the account default, which is a client-facing line.
-        # Crew traffic must go out on the dedicated intake number.
+        # Intake traffic must go out on the dedicated intake number.
         frm = (cc.get("reply") or {}).get("from_number")
         if frm:
             body["fromNumber"] = frm
@@ -333,16 +341,16 @@ def send_sms_ghl(cc: Dict[str, Any], contact_id: str, text: str) -> bool:
 def notify(cc: Dict[str, Any], payload: Dict[str, Any]) -> None:
     """Deliver the outcome.
 
-    Drafts go to an ADMIN for approval, not to the crew member who texted in - crews
+    Drafts go to an ADMIN for approval, not to the sender who texted in - field senders
     shouldn't be deciding what gets published on a client's website. The follow-up
-    question still goes to the crew, because they're the only ones who know the answer.
+    question still goes to the sender, because they're the only ones who know the answer.
     """
     provider = (cc.get("provider") or "ghl").lower()
     rep = cc.get("reply") or {}
     crew_id = payload.get("contact_id", "")
 
     # Identity is a contact id on GHL and a phone number on Twilio. Compare like for like,
-    # or the "approver is also the crew member" case sends the follow-up question twice.
+    # or the "approver is also the sender" case sends the follow-up question twice.
     #
     # More than one person can need the approval link - an owner and an office manager,
     # say. The plural key wins; the singular one is still honoured so existing configs keep
@@ -403,7 +411,7 @@ def notify(cc: Dict[str, Any], payload: Dict[str, Any]) -> None:
 
 FOLLOWUP_WINDOW_HOURS = 6
 
-# Crew-facing keywords. "NEW" starts a fresh job even if a held draft is waiting - without
+# Sender-facing keywords. "NEW" starts a fresh job even if a held draft is waiting - without
 # it, a photo-less opening line gets folded into the previous job as if it were an answer.
 # "DONE" closes the batch immediately instead of waiting out the quiet window.
 RE_NEW = re.compile(r"(?i)^\s*new\b[\s:,.\-]*")
@@ -411,7 +419,7 @@ RE_YES = re.compile(r"(?i)^\s*(y|yes|yeah|yep|same|add|that one|correct)\s*[.!]*
 RE_NO = re.compile(r"(?i)^\s*(n|no|nope|new one|different)\s*[.!]*\s*$")
 RE_DONE = re.compile(r"(?i)^\s*(done|finished|that'?s it|end|send it)\s*[.!]*\s*$")
 # "UPDATE" is deliberately the only way to touch a page that is already live. Nothing is
-# inferred: a crew saying "we also did the garage door" starts a new job, because guessing
+# inferred: a sender saying "we also did one more thing" starts a new job, because guessing
 # wrong here means silently rewriting a page a human already signed off on.
 RE_UPDATE = re.compile(r"(?i)^\s*(update|revise)\b[\s:,.\-]*")
 
@@ -420,11 +428,18 @@ RE_UPDATE = re.compile(r"(?i)^\s*(update|revise)\b[\s:,.\-]*")
 UPDATE_WINDOW_HOURS = 24 * 60
 
 
-def find_recent_held(client_id: str, phone: str, hours: float) -> Optional[Path]:
-    """Most recent held draft from this crew number, within the window.
+def find_recent_held(client_id: str, phone: str, hours: float,
+                     include_blocked: bool = False) -> Optional[Path]:
+    """Most recent held draft from this sender number, within the window.
 
-    A photo-less text is almost never a new job - it's the crew answering the question we
+    A photo-less text is almost never a new job - it's the sender answering the question we
     asked. Without this, the answer becomes its own thin page and the held draft stays held.
+
+    include_blocked: the follow-up threading paths pass True so an answer can fold into a
+    BLOCKED draft and regenerate it - a block from an over-eager rule used to make the job
+    a dead end where every follow-up text bounced with "no photos came through". The
+    text-approval path keeps the default False: a bare "ok" must never resolve to a
+    blocked draft when an older READY one is what the approver means.
     """
     best: Optional[tuple] = None
     cutoff = time.time() - hours * 3600
@@ -438,7 +453,9 @@ def find_recent_held(client_id: str, phone: str, hours: float) -> Optional[Path]
             continue
         if st.get("client_id") != client_id or st.get("phone") != phone:
             continue
-        if st.get("state") != "awaiting_approval" or st.get("verdict") == "BLOCKED":
+        if st.get("state") != "awaiting_approval":
+            continue
+        if st.get("verdict") == "BLOCKED" and not include_blocked:
             continue
         mt = sp.stat().st_mtime
         if mt < cutoff:
@@ -449,7 +466,7 @@ def find_recent_held(client_id: str, phone: str, hours: float) -> Optional[Path]
 
 
 def find_recent_published(client_id: str, phone: str, hours: float) -> Optional[Path]:
-    """Most recent LIVE page from this crew number - the thing an UPDATE would revise.
+    """Most recent LIVE page from this sender number - the thing an UPDATE would revise.
 
     Deliberately separate from find_recent_held(): that one looks for drafts still in
     review, this one for pages already on the site. Merging them would let an ordinary
@@ -497,7 +514,7 @@ def start_update(prior: Path, out: Path, job_id: str,
         dst = inbox / f"in-{i:02d}{src.suffix}"
         dst.write_bytes(src.read_bytes())
         carried.append(dst)
-    # New photos append, so existing captions keep their indexes and the crew can add a
+    # New photos append, so existing captions keep their indexes and the sender can add a
     # shot of the thing they are telling us about.
     files = carried + new_files
     merged = f"{pin.get('crew_text','').strip()} {crew_text.strip()}".strip()
@@ -516,7 +533,7 @@ def start_update(prior: Path, out: Path, job_id: str,
 
 def merge_followup(cfg: Dict[str, Any], cc: Dict[str, Any], job_dir: Path,
                    new_text: str, contact_id: str) -> bool:
-    """Fold the crew's answer into an existing draft and regenerate it in place."""
+    """Fold the sender's answer into an existing draft and regenerate it in place."""
     # An approved or published page is frozen. Regenerating it would rewrite live content
     # that a human signed off on, without review.
     try:
@@ -614,7 +631,7 @@ def clear_ask(client_id: str, phone: str) -> None:
     _ask_path(client_id, phone).unlink(missing_ok=True)
 
 
-def do_publish(job_id: str):
+def do_publish(job_id: str, allow_blocked: bool = False):
     """Publish an approved draft. Shared by the approve endpoint and text approval."""
     sp = JOBS / job_id / "status.json"
     st = json.loads(sp.read_text())
@@ -623,11 +640,19 @@ def do_publish(job_id: str):
     wp = cc.get("wordpress") or {}
     if not wp.get("base"):
         return False, {"error": "no WordPress target configured"}
+
+    # Reaching this endpoint IS the human sign-off — the reviewer read the draft and
+    # chose to publish. Creating a WordPress draft on top of that is a second approval
+    # nobody asked for. A client config that explicitly sets publish_status still wins.
+    wp = dict(wp)
+    wp.setdefault("publish_status", "publish")
+
     page_id = st.get("wp_page_id") if st.get("update_of") else None
     try:
         res = wp_publish.publish_job(cfg, wp, JOBS / job_id, log=log,
                                      update_page_id=page_id,
-                                     prior_media=st.get("prior_media") or [])
+                                     prior_media=st.get("prior_media") or [],
+                                     allow_blocked=allow_blocked)
     except Exception as e:
         log(f"  ! publish failed: {e}")
         st["state"] = "publish_failed"; st["error"] = str(e)[:500]
@@ -705,7 +730,7 @@ def process(key: str, batch: Dict[str, Any]) -> None:
 
     if not files and re.fullmatch(r"(?i)\s*(publish|ok|approve|yes|send it)\s*[.!]?\s*", crew_text or ""):
         # A bare approval keyword publishes the most recent READY draft - but only from a
-        # number on the approver list. A crew member saying "ok" must not publish to a
+        # number on the approver list. A field sender saying "ok" must not publish to a
         # client's live website.
         approvers = [norm_phone(p) for p in (cc.get("reply") or {}).get("approver_numbers", [])]
         if batch["phone"] in approvers:
@@ -728,7 +753,9 @@ def process(key: str, batch: Dict[str, Any]) -> None:
     import shutil
     if not files and crew_text and not batch.get("force_new") and not batch.get("force_update"):
         pend = load_ask(client_id, batch["phone"])
-        prior = find_recent_held(client_id, batch["phone"], FOLLOWUP_WINDOW_HOURS)
+        # include_blocked: a follow-up may be the fix that clears a BLOCK on regenerate.
+        prior = find_recent_held(client_id, batch["phone"], FOLLOWUP_WINDOW_HOURS,
+                                 include_blocked=True)
 
         # 1. we asked which job they meant, and this is the answer
         if pend:
@@ -768,7 +795,7 @@ def process(key: str, batch: Dict[str, Any]) -> None:
                 return
 
     if not files:
-        log("  no usable photos — asking the crew for some")
+        log("  no usable photos — asking the sender for some")
         notify(cc, {"job_id": job_id, "phone": batch["phone"], "contact_id": batch.get("contact_id", ""), "status": "no_photos",
                     "sms": "Got your message but no photos came through. Can you resend them?"})
         return
@@ -871,7 +898,7 @@ def inbound(client_id: str, path_token: str = ""):
 
     payload = request.get_json(silent=True) or request.form.to_dict() or {}
     if not payload:
-        # Unescaped quotes or newlines in a crew's message can produce invalid JSON.
+        # Unescaped quotes or newlines in a sender's message can produce invalid JSON.
         # Record the raw bytes so a malformed body is visible instead of silently empty.
         raw = request.get_data(as_text=True)[:4000]
         log(f"  ! body did not parse as JSON or form. Raw: {raw[:600]}")
@@ -885,8 +912,8 @@ def inbound(client_id: str, path_token: str = ""):
     # part of this pipeline at all. The allowlist is the line: below it, nothing is stored.
     allow = [norm_phone(p) for p in cc.get("crew_numbers", [])]
     if allow and msg["phone"] and msg["phone"] not in allow:
-        log(f"ignoring message from non-crew number {msg['phone']}")
-        return jsonify({"ok": True, "ignored": "not a crew number"}), 200
+        log(f"ignoring message from non-intake number {msg['phone']}")
+        return jsonify({"ok": True, "ignored": "not an intake number"}), 200
 
     # Log the raw shape. GHL's field names vary by how the workflow action was mapped,
     # and a silently-empty message or attachment list is otherwise invisible. A payload
@@ -988,8 +1015,13 @@ def approve(job_id: str):
     if expected and not hmac.compare_digest(str(supplied), str(expected)):
         log(f"job {job_id}: approve rejected — bad or missing token")
         abort(403)
-    if st.get("verdict") == "BLOCKED":
-        return jsonify({"ok": False, "reason": "blocked drafts cannot be approved"}), 400
+    # A BLOCK can be overridden, but only by an explicit second action from someone
+    # holding the approval token who has seen the matched rule - the preview's
+    # "Publish anyway" button sends force=1 after a confirm. Automation never sets it.
+    force = request.args.get("force") == "1"
+    if st.get("verdict") == "BLOCKED" and not force:
+        return jsonify({"ok": False, "reason": "blocked",
+                        "message": "Blocked drafts need the explicit override."}), 400
 
     # Freeze-on-approval: publish only the version the reviewer actually saw. A follow-up
     # text can regenerate a draft between someone reading it and tapping Approve, and
@@ -1010,10 +1042,14 @@ def approve(job_id: str):
                         **(st.get("wp") or {})}), 200
     st["state"] = "approved"
     st["approved_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    if st.get("verdict") == "BLOCKED" and force:
+        # The audit trail for "a human decided the guard was wrong".
+        st["block_override"] = {"at": st["approved_at"]}
+        log(f"job {job_id}: BLOCK OVERRIDDEN by reviewer")
     sp.write_text(json.dumps(st, indent=2))
     log(f"job {job_id} approved")
 
-    ok, res = do_publish(job_id)
+    ok, res = do_publish(job_id, allow_blocked=force)
     code = 200 if ok else 500
     return jsonify({"ok": ok, "state": "published" if ok else "publish_failed", **res}), code
 
@@ -1023,8 +1059,10 @@ GEO_CACHE = JOBS / "_geo.json"
 
 
 def town_latlon(town_label: str, region: str = "") -> Optional[List[float]]:
-    """Town centroid, cached. Deliberately the TOWN, never the address - this map must not
-    plot customers' houses. Geocoded once per town via OpenStreetMap.
+    """Geocode a place query, cached, via OpenStreetMap. What gets queried is the
+    vertical pack's map_pin decision: town_centroid packs pass the town label only -
+    their maps must not plot customers' houses - while exact_address packs pass the
+    street address, because there the location is public on purpose.
 
     The region comes from the client config. It used to be a hardcoded "New York", which
     silently put every other client's pins in the wrong state - a Florida town would match
@@ -1058,13 +1096,18 @@ def town_latlon(town_label: str, region: str = "") -> Optional[List[float]]:
 
 @app.get("/feed/<client_id>/projects.json")
 def projects_feed(client_id: str):
-    """Published jobs, for the /projects/ hub page to render. Public and read-only."""
+    """Published jobs, for the client's hub page to render. Public and read-only."""
     try:
         _cfg = load_client_config(client_id)
         towns = {t["slug"]: t for t in _cfg["towns"]}
         cfg_region = (_cfg.get("region") or "").strip()
     except FileNotFoundError:
         abort(404)
+    pack = vertical.pack_for(_cfg, log=log)
+    # Pin polarity is the pack's SAFETY-CRITICAL declaration, never inferred:
+    # exact_address packs pin the page's own address; everything else pins the
+    # town centroid so the map cannot plot a customer's house.
+    exact_pin = pack.manifest["map_pin"] == "exact_address"
 
     items = []
     for d in sorted(JOBS.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
@@ -1091,7 +1134,10 @@ def projects_feed(client_id: str):
             continue
         page = dr["page"]
         t = towns.get(page.get("town"), {})
-        pt = town_latlon(t.get("label", ""), cfg_region) if t else None
+        if exact_pin and (page.get("address") or "").strip():
+            pt = town_latlon(page["address"].strip(), cfg_region)
+        else:
+            pt = town_latlon(t.get("label", ""), cfg_region) if t else None
         media = (wp.get("media") or [])
         items.append({
             "title": page["h1"],
@@ -1105,11 +1151,22 @@ def projects_feed(client_id: str):
             "summary": page.get("meta_description", ""),
         })
 
-    resp = jsonify({"client": client_id, "count": len(items), "projects": items})
+    # The array key comes from the vertical pack — hub.js/town.js read it, so it is
+    # part of the deployed-theme contract. The URL stays /feed/<id>/projects.json for
+    # every already-deployed theme; a key-named alias can be added when needed.
+    feed_key = pack.hub["feed_key"]
+    resp = jsonify({"client": client_id, "count": len(items), feed_key: items})
     resp.headers["Access-Control-Allow-Origin"] = "*"   # read-only public feed
     resp.headers["Cache-Control"] = "public, max-age=300"
     return resp
 
+
+
+def _feed_key(client_id: str) -> str:
+    try:
+        return vertical.pack_for(load_client_config(client_id), log=log).hub["feed_key"]
+    except FileNotFoundError:
+        abort(404)
 
 
 @app.get("/hub/<client_id>/hub.js")
@@ -1118,7 +1175,8 @@ def hub_js(client_id: str):
     if not cc:
         abort(404)
     feed = f"{cc.get('public_base_url','').rstrip('/')}/feed/{client_id}/projects.json"
-    r = app.response_class(hub_page.build_js(feed), mimetype="application/javascript")
+    r = app.response_class(hub_page.build_js(feed, _feed_key(client_id)),
+                           mimetype="application/javascript")
     r.headers["Access-Control-Allow-Origin"] = "*"
     r.headers["Cache-Control"] = "public, max-age=120"
     return r
@@ -1130,7 +1188,8 @@ def town_js(client_id: str):
     if not cc:
         abort(404)
     feed = f"{cc.get('public_base_url','').rstrip('/')}/feed/{client_id}/projects.json"
-    r = app.response_class(hub_page.build_town_js(feed), mimetype="application/javascript")
+    r = app.response_class(hub_page.build_town_js(feed, _feed_key(client_id)),
+                           mimetype="application/javascript")
     r.headers["Access-Control-Allow-Origin"] = "*"
     r.headers["Cache-Control"] = "public, max-age=120"
     return r
@@ -1221,6 +1280,11 @@ def new_town(job_id: str):
 
     slug = re.sub(r"[^a-z0-9]+", "-", town_name.lower()).strip("-")
     gps = (draft.get("observations") or {}).get("_gps") or None
+    if not gps:
+        # Carrier and GHL re-encoding strips EXIF, so photo GPS rarely survives.
+        # The town centroid is plenty for the area page's map hero and the
+        # neighbouring-places lookup.
+        gps = town_latlon(town_name, (cfg.get("region") or "").strip())
     county = ""
     for i in draft.get("issues", []):
         m = re.search(r"is in ([A-Za-z ]+County)", i.get("detail", ""))
@@ -1228,8 +1292,12 @@ def new_town(job_id: str):
             county = m.group(1)
             break
 
+    # Same reasoning as do_publish: the tap on this token-guarded button is the
+    # approval. The page goes live now so the job page can link to it immediately.
+    wpc = dict(cc.get("wordpress") or {})
+    wpc.setdefault("town_page_status", "publish")
     try:
-        res = townpage.create(cfg, cc.get("wordpress") or {}, town_name, slug, county,
+        res = townpage.create(cfg, wpc, town_name, slug, county,
                               gps, cc.get("public_base_url", ""), st["client_id"],
                               model=cc.get("model", jobgen.MODEL_DEFAULT), log=log)
     except Exception as e:
@@ -1239,8 +1307,32 @@ def new_town(job_id: str):
         return jsonify(res), 400
 
     # register it so future jobs can target it directly
+    sa_parent = (cc.get("wordpress") or {}).get(
+        "service_areas_parent_slug",
+        vertical.pack_for(cfg, log=log).hub["area_parent_slug"])
+    # Retarget the draft at the page it caused to exist. Until now the job linked to
+    # the closest town that HAD a page; with the real one published, that is simply
+    # the wrong town. Patching the draft (not the config) means the fix survives
+    # env-var config reloads and is what do_publish reads at approval time.
+    old_slug = page.get("town") or ""
+    if old_slug and old_slug != slug:
+        old_url = next((t["url"] for t in cfg["towns"] if t["slug"] == old_slug), "")
+        old_label = next((t["label"] for t in cfg["towns"] if t["slug"] == old_slug), "")
+        new_url = f"/{sa_parent}/{slug}/"
+        page["town"] = slug
+        for l in page.get("internal_links", []):
+            if old_url and l.get("url") == old_url:
+                l["url"] = new_url
+                if old_label and old_label in (l.get("anchor") or ""):
+                    l["anchor"] = l["anchor"].replace(old_label, town_name)
+        draft["page"] = page
+        (JOBS / job_id / "draft.json").write_text(json.dumps(draft, indent=2))
+        log(f"  draft {job_id} retargeted: {old_slug} -> {slug}")
+        res["retargeted"] = (f"The job page now links to {town_name} "
+                             f"instead of {old_label or old_slug}.")
+
     cfg["towns"].append({"slug": slug, "label": town_name,
-                         "url": f"/service-areas/{slug}/", "county": county})
+                         "url": f"/{sa_parent}/{slug}/", "county": county})
     saved = save_client_config(st["client_id"], cfg)
     if saved:
         log(f"  {town_name} registered in {saved} — {len(cfg['towns'])} towns")
@@ -1258,6 +1350,34 @@ def health():
     with _lock:
         pending = len(_pending)
     return jsonify({"ok": True, "clients": list(CFG.get("clients", {})), "pending_batches": pending})
+
+
+@app.post("/waitlist")
+def waitlist():
+    """Founding-license / waitlist intake, forwarded from the fieldpress.app worker.
+
+    The marketing site cannot hold storage of its own (its Cloudflare token is
+    DNS+Pages scoped and the zone is mail-locked), so the form forwards here —
+    which is also where the Phase 3 control plane will live, so the funnel lands
+    in its long-term home from day one. Reading entries is deliberately not a
+    route: use `railway ssh` and read jobs/_waitlist/waitlist.jsonl.
+    """
+    tok = os.environ.get("WAITLIST_TOKEN", "")
+    if not tok or not hmac.compare_digest(request.args.get("token", ""), tok):
+        abort(403)
+    d = request.get_json(silent=True) or {}
+    rec = {k: str(d.get(k) or "")[:500]
+           for k in ("email", "name", "agency", "phone", "clients", "ghl", "vertical", "source")}
+    if "@" not in rec["email"] or len(rec["email"]) < 5:
+        abort(400)
+    rec["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    rec["ip"] = request.headers.get("CF-Connecting-IP", request.remote_addr or "")
+    wl = JOBS / "_waitlist"
+    wl.mkdir(parents=True, exist_ok=True)
+    with (wl / "waitlist.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+    log("waitlist signup:", rec["email"], rec.get("agency", ""))
+    return jsonify({"ok": True})
 
 
 
@@ -1278,6 +1398,34 @@ def load_config(path: str) -> Dict[str, Any]:
     log(f"config: {p.name}")
     return json.loads(p.read_text())
 
+
+
+def validate_clients() -> None:
+    """Fail loud at boot, not at the first text. Every configured client must
+    resolve a vertical pack and satisfy it: required fields present, schema enum
+    slots non-empty, prompts renderable, every compliance regex compiling. A
+    config that fails here used to fail days later as a sender-facing
+    'something broke' with no error anywhere."""
+    problems: List[str] = []
+    for cid in CFG.get("clients", {}):
+        try:
+            cfg = load_client_config(cid)
+        except Exception as e:
+            problems.append(f"{cid}: client config unreadable — {e}")
+            continue
+        try:
+            pack = vertical.pack_for(cfg, log=log)
+        except vertical.PackError as e:
+            problems.append(f"{cid}: {e}")
+            continue
+        problems += [f"{cid}: {p}" for p in vertical.validate_client(cfg, pack)]
+        log(f"  {cid}: vertical {pack.ref} ok")
+    if problems:
+        for p in problems:
+            log(f"!! boot validation: {p}")
+        raise SystemExit(
+            f"boot validation failed with {len(problems)} problem(s) — "
+            f"fix the client config(s) and redeploy")
 
 
 def repair_orphans() -> None:
@@ -1326,6 +1474,7 @@ def boot() -> None:
     CFG = load_config(os.environ.get("RECEIVER_CONFIG", "receiver-config.json"))
     if not os.environ.get("ANTHROPIC_API_KEY"):
         log("! ANTHROPIC_API_KEY is not set — generation will fail")
+    validate_clients()
     JOBS.mkdir(exist_ok=True)
     repair_orphans()
     threading.Thread(target=sweeper, daemon=True).start()
@@ -1347,12 +1496,13 @@ def main():
     if not os.environ.get("ANTHROPIC_API_KEY"):
         log("! ANTHROPIC_API_KEY is not set — generation will fail")
 
+    validate_clients()
     JOBS.mkdir(exist_ok=True)
     threading.Thread(target=sweeper, daemon=True).start()
     log(f"listening on :{args.port}  clients={list(CFG.get('clients', {}))}")
     for cid, cc in CFG.get("clients", {}).items():
         log(f"  POST /hook/{cid}/inbound?token=***  window={cc.get('batch_window_seconds',180)}s "
-            f"crew={len(cc.get('crew_numbers', []))}")
+            f"senders={len(cc.get('crew_numbers', []))}")
     app.run(host=args.host, port=args.port, threaded=True)
 
 

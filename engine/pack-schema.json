@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Vertical pack manifest (verticals/<id>/pack.json)",
+  "description": "Contract every vertical pack must satisfy. vertical.py enforces the required keys at load time; this document is the reference for pack authors and, later, the setup frontend.",
+  "type": "object",
+  "required": [
+    "id", "version", "label", "required_intake_fields", "publish_exact_location",
+    "strip_photo_gps", "map_pin", "prompts", "schemas", "jsonld",
+    "compliance_floor", "hub", "templates"
+  ],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "version": {"type": "integer", "minimum": 1},
+    "label": {"type": "string"},
+    "required_intake_fields": {
+      "type": "array", "items": {"type": "string"},
+      "description": "Client-config fields that must be present and non-empty for a client to boot on this pack."
+    },
+    "publish_exact_location": {
+      "type": "boolean",
+      "description": "SAFETY-CRITICAL polarity flag. false: locations are generalized (town centroid pins, GPS stripped) — right for customer-privacy verticals. true: the exact location is the point of the page — right for verticals where the address is public on purpose. Never inferred; always declared."
+    },
+    "strip_photo_gps": {"type": "boolean"},
+    "map_pin": {"type": "string", "enum": ["town_centroid", "exact_address"]},
+    "prompts": {
+      "type": "object",
+      "required": ["observe", "write", "area"],
+      "additionalProperties": {"type": "string"},
+      "description": "Relative paths to prompt files. observe = pass-1 system prompt (static). write/area = {{placeholder}} templates rendered per client."
+    },
+    "schemas": {
+      "type": "object",
+      "required": ["observe", "page", "area"],
+      "additionalProperties": {"type": "string"},
+      "description": "Relative paths to JSON-schema files. The page schema may use \"$client.<slot>\" enum references resolved per client; empty resolution fails the boot."
+    },
+    "jsonld": {
+      "type": "string",
+      "description": "Relative path to the Schema.org template. String values of the form \"$<context>.<field>\" resolve against {client, page, service, computed}."
+    },
+    "compliance_floor": {
+      "type": "string",
+      "description": "Relative path to {\"blocklist\": [{pattern, reason}, ...]}. Applied to every client on this pack IN ADDITION to the client's own rules — a client config can add but never remove."
+    },
+    "hub": {"type": "string"},
+    "templates": {
+      "type": "object",
+      "required": ["preview", "area_page"],
+      "additionalProperties": {"type": "string"}
+    }
+  }
+}

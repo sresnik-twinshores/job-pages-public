@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-hub_page.py — generate the HTML for the /projects/ hub page.
+hub_page.py — generate the HTML for the client's hub page.
 
 Deliberately self-contained: the whole thing (grid + map) lives in the WordPress page's
 own content, pulling from the receiver's JSON feed. No theme template, so no functions.php
@@ -18,9 +18,9 @@ import argparse
 # served by the receiver, where nothing can rewrite it.
 PAGE_HTML = """<!-- wp:html -->
 <div class="jp-hub">
-  <div id="jp-map" aria-label="Map of recent project locations"></div>
+  <div id="jp-map" aria-label="__MAP_ARIA__"></div>
   <ul class="jp-grid" id="jp-grid"></ul>
-  <div class="jp-empty" id="jp-empty" hidden>Recent projects will appear here.</div>
+  <div class="jp-empty" id="jp-empty" hidden>__EMPTY_TEXT__</div>
 </div>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="__BASE__/hub/__CLIENT__/hub.css"/>
@@ -54,7 +54,7 @@ HUB_JS = """(function () {
     return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
 
   fetch(FEED).then(function (r) { return r.json(); }).then(function (d) {
-    var items = (d.projects || []).filter(function (p) { return p.url; });
+    var items = (d.__FEED_KEY__ || []).filter(function (p) { return p.url; });
     if (!items.length) {
       // a brand-new hub has no jobs yet: an empty bordered map box reads as broken
       var m = document.getElementById('jp-map');
@@ -112,10 +112,10 @@ TOWN_JS = """(function () {
     return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
 
   fetch(FEED).then(function (r) { return r.json(); }).then(function (d) {
-    var items = (d.projects || []).filter(function (p) {
+    var items = (d.__FEED_KEY__ || []).filter(function (p) {
       return p.url && (p.town || '').trim().toLowerCase() === town;
     }).slice(0, 6);
-    // No projects in this town yet - leave the section hidden rather than show an
+    // Nothing published for this town yet - leave the section hidden rather than show an
     // empty heading. The page is edge-cached for 30 days, so this fills in on its own
     // as jobs land, without a purge.
     if (!items.length) return;
@@ -134,24 +134,42 @@ TOWN_JS = """(function () {
 })();"""
 
 
-def build_town_js(feed_url: str) -> str:
-    return TOWN_JS.replace("__FEED__", feed_url)
+def build_town_js(feed_url: str, feed_key: str) -> str:
+    return (TOWN_JS.replace("__FEED__", feed_url)
+                   .replace("__FEED_KEY__", feed_key))
 
 
-def build(base: str, client_id: str) -> str:
+def build(base: str, client_id: str, hub: dict) -> str:
+    """hub is the vertical pack's hub config (pack.hub) — it owns the copy."""
     return (PAGE_HTML.replace("__BASE__", base.rstrip("/"))
-                     .replace("__CLIENT__", client_id))
+                     .replace("__CLIENT__", client_id)
+                     .replace("__MAP_ARIA__", hub["map_aria_label"])
+                     .replace("__EMPTY_TEXT__", hub["empty_text"]))
 
 
-def build_js(feed_url: str) -> str:
-    return HUB_JS.replace("__FEED__", feed_url)
+def build_js(feed_url: str, feed_key: str) -> str:
+    return (HUB_JS.replace("__FEED__", feed_url)
+                  .replace("__FEED_KEY__", feed_key))
 
 
 if __name__ == "__main__":
+    import json
+    import os
+    from pathlib import Path
+
+    import vertical
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True)
     ap.add_argument("--client", required=True)
     ap.add_argument("--out", default="hub-page.html")
     a = ap.parse_args()
-    open(a.out, "w").write(build(a.base, a.client))
+    for p in (Path(os.path.expanduser("~/.sonic/sonic-user/client-configs")) / f"{a.client}.json",
+              Path(__file__).parent / "clients" / f"{a.client}.json"):
+        if p.exists():
+            cfg = json.loads(p.read_text(encoding="utf-8"))
+            break
+    else:
+        raise SystemExit(f"no config found for client {a.client!r}")
+    open(a.out, "w").write(build(a.base, a.client, vertical.pack_for(cfg).hub))
     print(f"wrote {a.out}")

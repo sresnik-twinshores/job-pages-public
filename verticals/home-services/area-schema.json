@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Page title naming the town and state, e.g. '<Services> in <Town>, <ST>'"
+    },
+    "meta_description": {
+      "type": "string"
+    },
+    "intro": {
+      "type": "string",
+      "description": "2-3 sentences. What the company does in this town."
+    },
+    "local_context": {
+      "type": "string",
+      "description": "One paragraph on housing stock and conditions that genuinely affect the work here. Only what you are confident about; vaguer is better than wrong."
+    },
+    "services_line": {
+      "type": "string",
+      "description": "One sentence naming the services offered."
+    },
+    "confidence_notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Anything asserted that a human should verify."
+    }
+  },
+  "required": [
+    "title",
+    "meta_description",
+    "intro",
+    "local_context",
+    "services_line",
+    "confidence_notes"
+  ],
+  "additionalProperties": false
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-jobgen.py — turn crew photos + one sentence into a publishable job page.
+jobgen.py — turn field photos + one sentence into a publishable job page.
 
 Prototype for the SMS/app intake pipeline. This is the GENERATION step only:
 no SMS transport, no WordPress publishing. It proves the part that was uncertain —
@@ -29,6 +29,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import vertical
 
 MODEL_DEFAULT = "claude-opus-5"
 
@@ -198,7 +200,7 @@ def town_from_gps(cfg: Dict[str, Any], latlon: Tuple[float, float],
 
     Returns the matched slug where possible, the raw place names either way. The raw names
     matter even when nothing matches: that is how an out-of-area job gets caught by its
-    coordinates rather than by whatever the crew happened to type.
+    coordinates rather than by whatever the sender happened to type.
     """
     place = reverse_geocode(latlon[0], latlon[1], log) or {}
     names = [n for n in (place.get("hamlet"), place.get("town")) if n]
@@ -223,113 +225,8 @@ def town_from_gps(cfg: Dict[str, Any], latlon: Tuple[float, float],
     return {"slug": "", "label": "", "place": place, "names": names}
 
 
-# ---------------------------------------------------------------- schemas ---
-def schema_observe() -> Dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "photos": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "index": {"type": "integer"},
-                        "shot_type": {"type": "string", "enum": ["before", "after", "during", "detail", "unclear"]},
-                        "subject": {"type": "string", "enum": ["window", "door", "siding", "trim", "interior", "exterior", "other"]},
-                        "visible": {"type": "array", "items": {"type": "string"},
-                                     "description": "Only what is literally visible. No inference about brand, price, or performance."},
-                        "product_description": {"type": "string",
-                                                 "description": "Plain description of the product shown, e.g. 'white vinyl double-hung with colonial grids'. Empty string if not determinable."},
-                        "count_visible": {"type": ["integer", "null"],
-                                           "description": "Number of units clearly countable in this photo, else null."},
-                        "usable": {"type": "boolean", "description": "Sharp, well-lit and relevant enough to publish."},
-                        "quality_notes": {"type": "string"}
-                    },
-                    "required": ["index", "shot_type", "subject", "visible", "product_description",
-                                 "count_visible", "usable", "quality_notes"],
-                    "additionalProperties": False
-                }
-            },
-            "overall_evidence": {"type": "array", "items": {"type": "string"},
-                                  "description": "Facts supported across photos."},
-            "cannot_determine": {"type": "array", "items": {"type": "string"},
-                                  "description": "Things a reader would want that the photos do NOT show."}
-        },
-        "required": ["photos", "overall_evidence", "cannot_determine"],
-        "additionalProperties": False
-    }
-
-
-def schema_page(cfg: Dict[str, Any], n_photos: int) -> Dict[str, Any]:
-    services = [s["slug"] for s in cfg["services"]]
-    towns = [t["slug"] for t in cfg["towns"]]
-    return {
-        "type": "object",
-        "properties": {
-            # enums are the geo/service guard: an out-of-area town is unrepresentable
-            "service": {"type": "string", "enum": services},
-            # The page to LINK to. The client has pages for only some of the towns they work
-            # in, so this is the nearest/parent page, not necessarily where the job was.
-            "town": {"type": "string", "enum": towns},
-            # Where the work ACTUALLY happened, free text. May be a town with no page.
-            "town_name": {"type": "string",
-                           "description": "The real town or hamlet the job was in, as it should "
-                                          "read on the page. Often the same as the town page; "
-                                          "use the true name when it differs."},
-            "service_confidence": {"type": "number"},
-            "town_confidence": {"type": "number"},
-            "h1": {"type": "string"},
-            "title_tag": {"type": "string"},
-            "meta_description": {"type": "string"},
-            "slug": {"type": "string"},
-            "body_html": {"type": "string",
-                           "description": "2-4 short <p> paragraphs, optional one <h2>. No inline styles, no headings above h2."},
-            "photos": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "index": {"type": "integer"},
-                        "caption": {"type": "string"},
-                        "alt": {"type": "string"}
-                    },
-                    "required": ["index", "caption", "alt"],
-                    "additionalProperties": False
-                }
-            },
-            "internal_links": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {"url": {"type": "string"}, "anchor": {"type": "string"}},
-                    "required": ["url", "anchor"],
-                    "additionalProperties": False
-                }
-            },
-            "facts_used": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "fact": {"type": "string"},
-                        "source": {"type": "string", "enum": ["photo", "crew_text", "gps", "client_config"]}
-                    },
-                    "required": ["fact", "source"],
-                    "additionalProperties": False
-                },
-                "description": "Every substantive claim in the page and where it came from."
-            },
-            "missing_info": {"type": "array", "items": {"type": "string"}},
-            "followup_question": {"type": ["string", "null"],
-                                   "description": "One SMS-length question that would most improve the page, or null."},
-            "compliance_flags": {"type": "array", "items": {"type": "string"}},
-            "quality_score": {"type": "number", "description": "0-1. Be harsh: thin input means a low score."}
-        },
-        "required": ["service", "town", "town_name", "service_confidence", "town_confidence", "h1", "title_tag",
-                     "meta_description", "slug", "body_html", "photos", "internal_links", "facts_used",
-                     "missing_info", "followup_question", "compliance_flags", "quality_score"],
-        "additionalProperties": False
-    }
+# Schemas and prompts live in the client's vertical pack (verticals/<id>/),
+# loaded through vertical.pack_for(cfg). Engine code owns the mechanism only.
 
 
 # ------------------------------------------------------------------ calls ---
@@ -350,62 +247,6 @@ def call(client, model: str, system: str, content: Any, schema: Dict[str, Any],
     return json.loads(text), resp.usage
 
 
-SYS_OBSERVE = """You are looking at photos from a home-improvement crew who just finished a job.
-
-Report ONLY what is literally visible. This is evidence collection, not marketing.
-
-Hard rules:
-- Never name a manufacturer, brand, model, price, warranty, or energy rating. You cannot see those.
-- Never guess at performance ("more efficient", "better insulated"). Not visible.
-- If a photo is blurry, dark, or shows nothing useful, mark usable=false and say why.
-- count_visible is only for units you can actually count in that single frame.
-"""
-
-
-def sys_write(cfg: Dict[str, Any]) -> str:
-    v = cfg["voice"]
-    banned = ", ".join(v["banned_style"])
-    return f"""You write short project pages for {cfg['business_name']}'s website. Each page documents one real job.
-
-VOICE
-{v['summary']}
-Reading level: {v['reading_level']}
-Never use these words or constructions: {banned}
-No em dashes. Vary sentence length. Do not open with "When it comes to" or any variant.
-
-THE ONE RULE THAT MATTERS
-Every substantive claim must trace to an observation from the photos, the crew's own words, or
-the GPS location. If you did not receive it, it does not go on the page. Do not invent the
-manufacturer, the product line, the price, the duration, the customer's name, the energy savings,
-the warranty, or how many people were on the crew. A short honest page beats a padded one.
-
-COMPLIANCE — these create real legal exposure, never write them:
-- Never say or imply the company manufactures its own product. It is a factory-direct licensee.
-- No tax credits. No rebates. No percentage or dollar savings claims. No energy-savings projections.
-- No financing, monthly payments, APR or 0% offers of any kind.
-- No superlatives about awards or being best/#1.
-- No roofing. That service was discontinued.
-If the crew's text pushes you toward any of the above, drop it and add a note to compliance_flags.
-
-STRUCTURE
-- h1: specific and local. Include the real count and product type when known, plus the town.
-- title_tag: <= {cfg['quality_gate']['title_max_chars']} chars. meta_description: <= {cfg['quality_gate']['meta_max_chars']} chars.
-- body_html: 2-4 short paragraphs. What the home needed, what went in, what changed for the owner.
-  Concrete over adjectival. If you only have thin material, write less, and lower quality_score.
-- captions describe that specific photo. alt text is literal and useful to a screen reader.
-- internal_links: choose only from the URLs supplied. Include the town page and the service page.
-- gps_resolved_town comes from the photos' own GPS. Where it is present it is more reliable
-  than a crew's spelling; if it disagrees with what the crew typed, prefer the GPS and note
-  the disagreement in missing_info.
-- The client works across a much wider area than the towns that have pages. `town_name` is
-  where the job really was and is what the copy, h1 and schema should say. `town` is only the
-  existing page to link to - the nearest or parent one. When they differ that is normal, not
-  an error: say the real place, link to the closest page, and note it in missing_info.
-- Use hamlet_to_town_page when it has an entry for the place.
-- quality_score: be harsh. One usable photo and four words from the crew is not a 0.8.
-"""
-
-
 # ----------------------------------------------------------------- guards ---
 def run_guards(cfg: Dict[str, Any], page: Dict[str, Any], obs: Dict[str, Any],
                gps_town: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
@@ -419,13 +260,15 @@ def run_guards(cfg: Dict[str, Any], page: Dict[str, Any], obs: Dict[str, Any],
     ])
     text_only = re.sub(r"<[^>]+>", " ", blob)
 
-    for rule in cfg["compliance_blocklist"]:
+    # Pack compliance floor first, then the client's own rules. The floor cannot
+    # be removed by a client config — only added to.
+    for rule in vertical.pack_for(cfg).compliance_rules(cfg):
         m = re.search(rule["pattern"], text_only)
         if m:
             issues.append({"level": "BLOCK", "check": "compliance",
                            "detail": f'matched "{m.group(0).strip()}" — {rule["reason"]}'})
 
-    # Rules that only apply part of the year, e.g. a county fertilizer blackout. The job is
+    # Rules that only apply part of the year, e.g. a seasonal county ordinance. The job is
     # generated within hours of the work, so today's month stands in for the job's month.
     month = _dt.date.today().month
     for rule in cfg.get("seasonal_blocklist", []):
@@ -548,21 +391,6 @@ def verdict(issues: List[Dict[str, str]]) -> str:
 
 
 # ---------------------------------------------------------------- output ---
-def build_schema_org(cfg: Dict[str, Any], page: Dict[str, Any], town: Dict, svc: Dict) -> Dict[str, Any]:
-    return {
-        "@context": "https://schema.org",
-        "@type": "Service",
-        "name": page["h1"],
-        "serviceType": svc["label"],
-        "provider": {"@type": "HomeAndConstructionBusiness", "name": cfg["business_name"],
-                      "telephone": cfg["phone"], "url": cfg["site"]},
-        # State/province comes from the client config. There is no sensible default, so a
-        # config without "region" yields the bare town rather than a wrong state.
-        "areaServed": {"@type": "Place", "name": _place_name(cfg, page, town)},
-        "description": page["meta_description"],
-    }
-
-
 def write_preview(out: Path, cfg, page, obs, issues, photos, schema_org, usage_note,
                   content_hash: str = "") -> Path:
     town = {t["slug"]: t for t in cfg["towns"]}.get(page.get("town"), {"label": page.get("town")})
@@ -590,112 +418,36 @@ def write_preview(out: Path, cfg, page, obs, issues, photos, schema_org, usage_n
 
     needs_town = "true" if any(i["check"] == "no-town-page" for i in issues) else "false"
     town_name_js = html.escape(page.get("town_name", ""), quote=True)
-    doc = f"""<!doctype html><meta charset="utf-8">
-<title>Job page draft — {html.escape(page.get('h1',''))}</title>
-<style>
- body{{font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:860px;margin:0 auto;padding:24px;color:#1a1a1a}}
- .verdict{{background:{colour.get(v,'#333')};color:#fff;padding:12px 16px;border-radius:8px;font-weight:600}}
- .serp{{border:1px solid #ddd;border-radius:8px;padding:14px;margin:18px 0;background:#fafafa}}
- .serp .t{{color:#1a0dab;font-size:19px}} .serp .u{{color:#0b7d2f;font-size:13px}} .serp .d{{color:#4d5156;font-size:14px}}
- table{{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px}}
- td,th{{border:1px solid #e3e3e3;padding:7px 9px;text-align:left;vertical-align:top}}
- .lv{{font-weight:700;white-space:nowrap}} .BLOCK{{color:#b3261e}} .HOLD{{color:#8a6100}} .WARN{{color:#666}} .INFO{{color:#1a6b34}}
- figure{{margin:0 0 18px}} img{{max-width:100%;border-radius:8px;display:block}}
- figcaption{{font-size:14px;color:#444;padding-top:6px}}
- .alt{{display:block;color:#888;font-size:12px;font-family:ui-monospace,monospace}}
- .src{{font-size:11px;background:#eee;padding:1px 6px;border-radius:9px;color:#555}}
- .page{{border:2px dashed #ccd;padding:20px;border-radius:10px;margin:18px 0}}
- h1{{font-size:27px;line-height:1.25}} pre{{background:#f6f6f6;padding:12px;border-radius:8px;overflow:auto;font-size:12px}}
- .meta{{color:#666;font-size:13px}}
-</style>
-<div class="verdict">{v} &nbsp;·&nbsp; quality {page.get('quality_score')} &nbsp;·&nbsp; {usage_note}</div>
-
-<div id="approve-bar" style="display:none;margin:16px 0;padding:14px;border:1px solid #d7d7d7;border-radius:10px;background:#fff">
- <button id="approve-btn" style="background:#1a6b34;color:#fff;border:0;padding:12px 22px;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer">Approve &amp; publish</button>
- <button id="town-btn" style="display:none;background:#fff;color:#1a6b34;border:1.5px solid #1a6b34;padding:12px 18px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;margin-left:10px"></button>
- <span id="approve-msg" style="margin-left:14px;color:#444"></span>
-</div>
-<script>
-(function () {{
-  var t = new URLSearchParams(location.search).get('t');
-  if (!t) return;                               // no token, no buttons
-  var H = '{content_hash}';                     // the version being looked at
-  var bar = document.getElementById('approve-bar');
-  var btn = document.getElementById('approve-btn');
-  var msg = document.getElementById('approve-msg');
-  bar.style.display = 'block';
-
-  // Offer the town page only when this job flagged one as missing.
-  var NEEDS_TOWN = {needs_town};
-  var TOWN_NAME = "{town_name_js}";
-  var tbtn = document.getElementById('town-btn');
-  if (NEEDS_TOWN && TOWN_NAME) {{
-    tbtn.textContent = 'Create ' + TOWN_NAME + ' service-area page';
-    tbtn.style.display = 'inline-block';
-    tbtn.addEventListener('click', function () {{
-      tbtn.disabled = true; msg.textContent = 'Writing the ' + TOWN_NAME + ' page\u2026';
-      fetch('new-town?t=' + encodeURIComponent(t), {{method: 'POST'}})
-        .then(function (r) {{ return r.json(); }})
-        .then(function (d) {{
-          if (d.ok) {{
-            msg.innerHTML = 'Created as a draft. <a href="' + d.url + '" target="_blank">Open it</a>'
-              + (d.verify && d.verify.length ? ' \u2014 ' + d.verify.length + ' detail(s) to verify.' : '');
-          }} else {{
-            msg.textContent = 'Failed: ' + (d.reason || 'unknown'); tbtn.disabled = false;
-          }}
-        }})
-        .catch(function (e) {{ msg.textContent = 'Failed: ' + e; tbtn.disabled = false; }});
-    }});
-  }}
-  btn.addEventListener('click', function () {{
-    btn.disabled = true; msg.textContent = 'Publishing…';
-    fetch('approve?t=' + encodeURIComponent(t) + '&h=' + encodeURIComponent(H), {{method: 'POST'}})
-      .then(function (r) {{ return r.json(); }})
-      .then(function (d) {{
-        if (d.ok) {{
-          msg.innerHTML = d.url
-            ? 'Published as a WordPress draft. <a href="' + d.url + '" target="_blank">Open in WordPress</a>'
-            : 'Approved.';
-        }} else {{
-          if (d.reason === 'stale') {{
-            msg.innerHTML = 'This draft changed after you opened it. '
-              + '<a href="">Reload</a> and review the new version before publishing.';
-          }} else {{
-            msg.textContent = 'Failed: ' + (d.error || d.reason || 'unknown');
-            btn.disabled = false;
-          }}
-        }}
-      }})
-      .catch(function (e) {{ msg.textContent = 'Failed: ' + e; btn.disabled = false; }});
-  }});
-}})();
-</script>
-
-<h2>As it would appear in search</h2>
-<div class="serp">
- <div class="t">{html.escape(page.get('title_tag',''))}</div>
- <div class="u">{cfg['site']}/projects/{html.escape(page.get('slug',''))}/</div>
- <div class="d">{html.escape(page.get('meta_description',''))}</div>
-</div>
-
-<h2>Checks</h2>
-<table><tr><th>level</th><th>check</th><th>detail</th></tr>{rows}</table>
-
-<h2>The page</h2>
-<div class="page">
- <p class="meta">{html.escape(town.get('label',''))} · {html.escape(page.get('service',''))}</p>
- <h1>{html.escape(page.get('h1',''))}</h1>
- {page.get('body_html','')}
- {figs}
- <p class="meta">Links: {' · '.join(html.escape(l['anchor']) + ' → ' + html.escape(l['url']) for l in page.get('internal_links', []))}</p>
-</div>
-
-<h2>Where every claim came from</h2><ul>{facts}</ul>
-<h2>What the crew did not tell us</h2><ul>{missing}</ul>
-<h2>Follow-up text to send</h2>
-<p>{html.escape(page.get('followup_question') or '(none needed)')}</p>
-<h2>Schema</h2><pre>{html.escape(json.dumps(schema_org, indent=2))}</pre>
-"""
+    # The document itself — every heading, button label and layout choice — is the
+    # vertical pack's. The engine only computes the values and fills the slots.
+    tokens = {
+        "h1_esc": html.escape(page.get("h1", "")),
+        "verdict_colour": colour.get(v, "#333"),
+        "verdict": v,
+        "quality": f"{page.get('quality_score')}",
+        "usage_note": usage_note,
+        "content_hash": content_hash,
+        "needs_town": needs_town,
+        "town_name_js": town_name_js,
+        "title_tag_esc": html.escape(page.get("title_tag", "")),
+        "site": cfg["site"],
+        "slug_esc": html.escape(page.get("slug", "")),
+        "meta_esc": html.escape(page.get("meta_description", "")),
+        "rows": rows,
+        "town_label_esc": html.escape(town.get("label", "")),
+        "service_esc": html.escape(page.get("service", "")),
+        "body_html": page.get("body_html", ""),
+        "figs": figs,
+        "links_line": " · ".join(html.escape(l["anchor"]) + " → " + html.escape(l["url"])
+                                 for l in page.get("internal_links", [])),
+        "facts": facts,
+        "missing": missing,
+        "followup_esc": html.escape(page.get("followup_question") or "(none needed)"),
+        "schema_org_esc": html.escape(json.dumps(schema_org, indent=2)),
+    }
+    doc = vertical.pack_for(cfg).preview_template
+    for k, val in tokens.items():
+        doc = doc.replace("{{" + k + "}}", val)
     p = out / "preview.html"
     p.write_text(doc, encoding="utf-8")
     return p
@@ -704,10 +456,11 @@ def write_preview(out: Path, cfg, page, obs, issues, photos, schema_org, usage_n
 # ------------------------------------------------------------------- main ---
 def generate_job(cfg: Dict[str, Any], files: List[Path], crew_text: str,
                  out: Path, model: str = MODEL_DEFAULT, log=print) -> Dict[str, Any]:
-    """Photos + crew text -> reviewed draft. Used by the CLI and the webhook receiver."""
+    """Photos + sender text -> reviewed draft. Used by the CLI and the webhook receiver."""
     import anthropic
 
     out.mkdir(parents=True, exist_ok=True)
+    pack = vertical.pack_for(cfg, log)
     photos = [prep_image(p, out, i) for i, p in enumerate(files)]
     gps = [p["gps"] for p in photos if p["gps"]]
 
@@ -722,7 +475,7 @@ def generate_job(cfg: Dict[str, Any], files: List[Path], crew_text: str,
         content.append({"type": "image", "source": {"type": "base64",
                                                      "media_type": "image/jpeg", "data": p["b64"]}})
     content.append({"type": "text", "text": f"Report what is visible in these {len(photos)} photos."})
-    obs, u1 = call(client, model, SYS_OBSERVE, content, schema_observe(), effort="low")
+    obs, u1 = call(client, model, pack.observe_prompt, content, pack.observe_schema, effort="low")
     spend += u1.input_tokens / 1e6 * pin + u1.output_tokens / 1e6 * pout
     log(f"  pass 1: {sum(1 for p in obs['photos'] if p['usable'])}/{len(photos)} photos usable")
 
@@ -747,16 +500,18 @@ def generate_job(cfg: Dict[str, Any], files: List[Path], crew_text: str,
         "licences": cfg["licences"],
         "hamlet_to_town_page": cfg.get("town_aliases", {}),
     }
-    page, u2 = call(client, model, sys_write(cfg),
+    page, u2 = call(client, model, pack.write_prompt(cfg),
                     [{"type": "text", "text": json.dumps(brief, indent=2)}],
-                    schema_page(cfg, len(photos)))
+                    pack.page_schema(cfg, len(photos)))
     spend += u2.input_tokens / 1e6 * pin + u2.output_tokens / 1e6 * pout
 
     issues = run_guards(cfg, page, obs, gps_town)
     v = verdict(issues)
     town = {t["slug"]: t for t in cfg["towns"]}.get(page["town"], {"label": page["town"]})
     svc = {s["slug"]: s for s in cfg["services"]}.get(page["service"], {"label": page["service"]})
-    schema_org = build_schema_org(cfg, page, town, svc)
+    # Region comes from the client config; no sensible default exists, so a config
+    # without "region" yields the bare place name rather than a wrong state.
+    schema_org = pack.jsonld(cfg, page, svc, {"place_name": _place_name(cfg, page, town)})
     usage_note = (f"{u1.input_tokens + u2.input_tokens:,} in / "
                   f"{u1.output_tokens + u2.output_tokens:,} out · ${spend:.3f}")
 
@@ -782,7 +537,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--client", required=True)
     ap.add_argument("--photos", nargs="+", required=True, help="photo files or a directory")
-    ap.add_argument("--text", default="", help="what the crew texted in")
+    ap.add_argument("--text", default="", help="what the sender texted in")
     ap.add_argument("--model", default=MODEL_DEFAULT)
     ap.add_argument("--out", default="out")
     ap.add_argument("--dry-run", action="store_true", help="validate without calling the API")
@@ -792,7 +547,9 @@ def main() -> None:
     cfg_path = here / "clients" / f"{args.client}.json"
     if not cfg_path.exists():
         sys.exit(f"No config at {cfg_path}")
-    cfg = json.loads(cfg_path.read_text())
+    # Explicit UTF-8: configs carry licence lines and voice text with non-ASCII
+    # characters, and Windows otherwise decodes them as cp1252.
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
 
     _require_pillow()
     files = collect_photos(args.photos)
@@ -805,7 +562,7 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     print(f"\n  {len(files)} photo(s) · client {cfg['business_name']}")
-    print(f'  crew text: "{args.text or "(none)"}"')
+    print(f'  sender text: "{args.text or "(none)"}"')
 
     if args.dry_run:
         photos = [prep_image(p, out, i) for i, p in enumerate(files)]
@@ -818,9 +575,11 @@ def main() -> None:
 
     r = generate_job(cfg, files, args.text, out, args.model)
     page, issues = r["page"], r["issues"]
+    hub_slug = vertical.pack_for(cfg).hub["slug"]
     print(f"\n  {r['verdict']}   quality {page['quality_score']}   ${r['cost_usd']:.3f}")
     print(f"  {page['h1']}")
-    print(f"  /projects/{page['slug']}/   →  {r['town_label']} · {r['service_label']}")
+    # "->" not an arrow glyph: Windows consoles default to cp1252 and die on U+2192.
+    print(f"  /{hub_slug}/{page['slug']}/   ->  {r['town_label']} - {r['service_label']}")
     for i in issues:
         print(f"    [{i['level']}] {i['check']}: {i['detail']}")
     if page.get("followup_question"):

@@ -1,0 +1,38 @@
+{
+  "_comment": "Vertical pack manifest. Everything vertical-specific lives in this folder; engine code (jobgen, webhook_receiver, publish, townpage, hub_page) must contain no vertical vocabulary. Clients select a pack with \"vertical\": \"home-services@1\" in their config — the version is pinned so a pack update never silently changes a live client's behaviour.",
+  "id": "home-services",
+  "version": 1,
+  "label": "Home Services Job Pages",
+  "required_intake_fields": [
+    "business_name",
+    "site",
+    "phone",
+    "voice",
+    "compliance_blocklist",
+    "forbidden_towns",
+    "licences",
+    "quality_gate",
+    "services",
+    "towns"
+  ],
+  "publish_exact_location": false,
+  "strip_photo_gps": true,
+  "map_pin": "town_centroid",
+  "prompts": {
+    "observe": "prompts/observe.md",
+    "write": "prompts/write.md",
+    "area": "prompts/area.md"
+  },
+  "schemas": {
+    "observe": "observe-schema.json",
+    "page": "page-schema.json",
+    "area": "area-schema.json"
+  },
+  "jsonld": "jsonld.json",
+  "compliance_floor": "compliance.json",
+  "hub": "hub.json",
+  "templates": {
+    "preview": "templates/preview.html.tmpl",
+    "area_page": "templates/area-page.html.tmpl"
+  }
+}
