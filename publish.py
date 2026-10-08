@@ -46,7 +46,10 @@ class PublishError(RuntimeError):
 
 
 def _auth(wp: Dict[str, Any]) -> Tuple[str, str]:
-    pw = os.environ.get(wp.get("app_password_env", ""), "")
+    # Inline app_password first: control-plane-written configs carry the credential
+    # directly (volume-stored, no redeploy needed). The env-var indirection remains
+    # for operator-managed clients whose secrets live in the host dashboard.
+    pw = wp.get("app_password") or os.environ.get(wp.get("app_password_env", ""), "")
     if not pw:
         raise PublishError(f"env var {wp.get('app_password_env')!r} is empty or unset")
     if not wp.get("user"):

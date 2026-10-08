@@ -97,7 +97,12 @@ def log(*a):
 #   1. CLIENT_CONFIG_<SLUG>   env var (how the deployed container gets them)
 #   2. ~/.sonic/sonic-user/client-configs/<id>.json   (local working copy)
 #   3. clients/<id>.json      (repo — only the shipped example should be here)
-CLIENT_CONFIG_DIR = Path(os.path.expanduser("~/.sonic/sonic-user/client-configs"))
+CLIENT_CONFIG_DIR = Path(os.environ.get(
+    "CLIENT_CONFIG_DIR", "~/.sonic/sonic-user/client-configs")).expanduser()
+# Control-plane storage: client entries written through /admin live on the volume
+# so they survive deploys and never require an env change. Env config still wins
+# on collision, so operator-managed clients cannot be shadowed through the API.
+BLOCKS_DIR = JOBS / "_config" / "blocks"
 
 
 def _client_env_name(client_id: str) -> str:
@@ -131,8 +136,61 @@ def save_client_config(client_id: str, cfg: Dict[str, Any]) -> Optional[Path]:
     return None
 
 
+def load_block(client_id: str) -> Optional[Dict[str, Any]]:
+    """A control-plane-written client entry from the volume, or None."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,63}", client_id):
+        return None
+    p = BLOCKS_DIR / f"{client_id}.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        log(f"! block {client_id} unreadable: {e}")
+        return None
+
+
+def merge_blocks(cfg: Dict[str, Any]) -> None:
+    """Fold volume-stored client entries into the boot config. Env-defined
+    clients win on collision — the API cannot shadow an operator's client.
+
+    Volume clients are validated HERE and quarantined on failure instead of
+    being handed to boot validation: an env client failing boot is an operator
+    problem that should stop the ship, but a control-plane-written client must
+    never be able to take the whole receiver down with it (learned 2026-10-07
+    when a half-written entry crash-looped staging)."""
+    clients = cfg.setdefault("clients", {})
+    if not BLOCKS_DIR.exists():
+        return
+    for p in sorted(BLOCKS_DIR.glob("*.json")):
+        cid = p.stem
+        if cid in clients:
+            log(f"block {cid}: env config wins, volume entry ignored")
+            continue
+        block = load_block(cid)
+        if not block:
+            continue
+        try:
+            ccfg = load_client_config(cid)
+            pack = vertical.pack_for(ccfg, log=log)
+            problems = vertical.validate_client(ccfg, pack)
+        except Exception as e:
+            problems = [str(e)]
+        if problems:
+            log(f"!! volume client {cid} QUARANTINED (not serving): {problems}")
+            continue
+        clients[cid] = block
+        log(f"client {cid}: loaded from volume ({ccfg.get('vertical')})")
+
+
 def client_cfg(client_id: str) -> Dict[str, Any]:
     c = CFG.get("clients", {}).get(client_id)
+    if not c:
+        # Hot add: a client created through /admin since boot becomes
+        # routable without a restart.
+        c = load_block(client_id)
+        if c:
+            CFG.setdefault("clients", {})[client_id] = c
     if not c:
         abort(404, "unknown client")
     return c
@@ -1380,6 +1438,149 @@ def waitlist():
     return jsonify({"ok": True})
 
 
+# ---------------------------------------------------------------- admin ---
+# The control plane (PHASE-3-PLAN 3a). Everything the onboarding wizard needs:
+# pack discovery, client create/update with validation on every write, and
+# connection checks. Writes land on the volume (BLOCKS_DIR / CLIENT_CONFIG_DIR)
+# so a new client needs no env change and no redeploy.
+
+def _admin_auth() -> None:
+    tok = os.environ.get("ADMIN_TOKEN", "")
+    if not tok:
+        abort(503, "ADMIN_TOKEN is not configured on this deployment")
+    supplied = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if not hmac.compare_digest(supplied, tok):
+        abort(403)
+
+
+def _mask(block: Dict[str, Any]) -> Dict[str, Any]:
+    """A client entry safe to return: secrets become presence flags."""
+    out = json.loads(json.dumps(block))
+    if "secret" in out:
+        out["secret"] = "***"
+    wp = out.get("wordpress") or {}
+    if wp.get("app_password"):
+        wp["app_password"] = "***"
+    return out
+
+
+@app.get("/admin/packs")
+def admin_packs():
+    _admin_auth()
+    packs = []
+    for d in sorted(vertical.PACKS_DIR.iterdir()):
+        mf = d / "pack.json"
+        if not mf.exists():
+            continue
+        try:
+            m = json.loads(mf.read_text(encoding="utf-8"))
+        except Exception as e:
+            packs.append({"id": d.name, "error": str(e)})
+            continue
+        packs.append({"id": d.name, "version": m.get("version"),
+                      "label": m.get("label", d.name),
+                      "description": m.get("description", ""),
+                      "ref": f"{d.name}@{m.get('version', 1)}"})
+    schema_path = HERE / "engine" / "config-schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8")) if schema_path.exists() else None
+    return jsonify({"packs": packs, "config_schema": schema})
+
+
+@app.get("/admin/clients")
+def admin_clients():
+    _admin_auth()
+    out = []
+    for cid, block in CFG.get("clients", {}).items():
+        src = "volume" if (BLOCKS_DIR / f"{cid}.json").exists() and not os.environ.get(
+            "RECEIVER_CONFIG_JSON", "").count(f'"{cid}"') else "env"
+        out.append({"client_id": cid, "source": src, "entry": _mask(block)})
+    return jsonify({"clients": out})
+
+
+@app.get("/admin/clients/<client_id>")
+def admin_client_get(client_id: str):
+    _admin_auth()
+    entry = CFG.get("clients", {}).get(client_id) or load_block(client_id)
+    if not entry:
+        abort(404)
+    try:
+        cfg = load_client_config(client_id)
+    except FileNotFoundError:
+        cfg = None
+    return jsonify({"client_id": client_id, "entry": _mask(entry), "config": cfg})
+
+
+@app.post("/admin/clients/<client_id>")
+def admin_client_put(client_id: str):
+    """Create or update a client. The body carries both halves:
+      config — the content config the engine writes from (validated against its pack)
+      entry  — the routing entry (secret, transport, wordpress target)
+    Validation runs on EVERY write; nothing can be stored that boot would refuse.
+    """
+    _admin_auth()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,63}", client_id):
+        abort(400, "client_id must be lowercase slug")
+    body = request.get_json(silent=True) or {}
+    cfg, entry = body.get("config"), body.get("entry")
+    if not isinstance(cfg, dict) or not isinstance(entry, dict):
+        abort(400, "body needs 'config' and 'entry' objects")
+    if cfg.get("client_id") != client_id:
+        abort(400, "config.client_id must match the URL")
+    try:
+        pack = vertical.pack_for(cfg, log=log)
+    except vertical.PackError as e:
+        return jsonify({"ok": False, "problems": [str(e)]}), 400
+    problems = vertical.validate_client(cfg, pack)
+    if not entry.get("secret") or len(str(entry["secret"])) < 16:
+        problems.append("entry.secret missing or shorter than 16 chars")
+    wp = entry.get("wordpress") or {}
+    if not wp.get("base") or not wp.get("user"):
+        problems.append("entry.wordpress.base and .user are required")
+    if not wp.get("app_password") and not wp.get("app_password_env"):
+        problems.append("entry.wordpress needs app_password or app_password_env")
+    if client_id in CFG.get("clients", {}) and not (BLOCKS_DIR / f"{client_id}.json").exists():
+        problems.append("client is env-managed — update it in the host dashboard, not here")
+    if problems:
+        return jsonify({"ok": False, "problems": problems}), 400
+
+    BLOCKS_DIR.mkdir(parents=True, exist_ok=True)
+    CLIENT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    (CLIENT_CONFIG_DIR / f"{client_id}.json").write_text(
+        json.dumps(cfg, indent=2), encoding="utf-8")
+    (BLOCKS_DIR / f"{client_id}.json").write_text(
+        json.dumps(entry, indent=2), encoding="utf-8")
+    CFG.setdefault("clients", {})[client_id] = entry
+    log(f"admin: client {client_id} written ({cfg.get('vertical')})")
+    return jsonify({"ok": True, "client_id": client_id,
+                    "vertical": cfg.get("vertical"),
+                    "hook": f"/hook/{client_id}/<secret>/inbound"})
+
+
+@app.post("/admin/clients/<client_id>/test-wp")
+def admin_test_wp(client_id: str):
+    """Credential + reachability check against the client's WordPress."""
+    _admin_auth()
+    entry = CFG.get("clients", {}).get(client_id) or load_block(client_id)
+    if not entry:
+        abort(404)
+    wp = entry.get("wordpress") or {}
+    pw = wp.get("app_password") or os.environ.get(wp.get("app_password_env", ""), "")
+    if not (wp.get("base") and wp.get("user") and pw):
+        return jsonify({"ok": False, "problems": ["wordpress base/user/password incomplete"]})
+    try:
+        r = requests.get(f"{wp['base'].rstrip('/')}/wp-json/wp/v2/pages",
+                         params={"per_page": 1, "context": "edit"},
+                         auth=(wp["user"], pw),
+                         headers={"User-Agent": os.environ.get("JOB_PAGES_UA", "JobPages/1.0"),
+                                  "Accept": "application/json"},
+                         timeout=20)
+        ok = r.status_code == 200
+        return jsonify({"ok": ok, "status": r.status_code,
+                        "problems": [] if ok else [r.text[:200]]})
+    except Exception as e:
+        return jsonify({"ok": False, "problems": [str(e)]})
+
+
 
 def load_config(path: str) -> Dict[str, Any]:
     """Prefer RECEIVER_CONFIG_JSON (how cloud hosts inject config) over the local file,
@@ -1387,7 +1588,9 @@ def load_config(path: str) -> Dict[str, Any]:
     raw = os.environ.get("RECEIVER_CONFIG_JSON")
     if raw:
         log("config: RECEIVER_CONFIG_JSON")
-        return json.loads(raw)
+        cfg = json.loads(raw)
+        merge_blocks(cfg)
+        return cfg
     p = Path(path)
     if not p.is_absolute():
         p = HERE / p
@@ -1396,7 +1599,9 @@ def load_config(path: str) -> Dict[str, Any]:
             f"No config at {p} and RECEIVER_CONFIG_JSON is unset — "
             "copy receiver-config.example.json and fill it in.")
     log(f"config: {p.name}")
-    return json.loads(p.read_text())
+    cfg = json.loads(p.read_text())
+    merge_blocks(cfg)
+    return cfg
 
 
 

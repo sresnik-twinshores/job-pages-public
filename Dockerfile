@@ -7,6 +7,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY jobgen.py webhook_receiver.py publish.py hub_page.py townpage.py vertical.py wsgi.py ./
 COPY verticals/ ./verticals/
 COPY clients/ ./clients/
+# engine/ carries the config + pack JSON schemas the control plane serves to
+# the onboarding wizard (GET /admin/packs). Selective COPY bit us once before
+# the cutover (vertical.py) — keep this list honest when adding directories.
+COPY engine/ ./engine/
 
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8787
