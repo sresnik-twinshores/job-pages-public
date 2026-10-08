@@ -1453,6 +1453,31 @@ def _admin_auth() -> None:
         abort(403)
 
 
+# The portal is served from its own origin; the browser needs CORS consent to
+# call /admin/* with the bearer token. Origins are an explicit allowlist —
+# never "*" on an authed surface.
+ADMIN_ORIGINS = [o.strip() for o in os.environ.get(
+    "ADMIN_CORS_ORIGINS",
+    "https://portal-proto.fieldpress.pages.dev,http://localhost:8788").split(",") if o.strip()]
+
+
+@app.after_request
+def _admin_cors(resp):
+    if request.path.startswith("/admin/"):
+        origin = request.headers.get("Origin", "")
+        if origin in ADMIN_ORIGINS:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            resp.headers["Vary"] = "Origin"
+    return resp
+
+
+@app.route("/admin/<path:_rest>", methods=["OPTIONS"])
+def _admin_preflight(_rest: str):
+    return ("", 204)
+
+
 def _mask(block: Dict[str, Any]) -> Dict[str, Any]:
     """A client entry safe to return: secrets become presence flags."""
     out = json.loads(json.dumps(block))
@@ -1554,6 +1579,33 @@ def admin_client_put(client_id: str):
     return jsonify({"ok": True, "client_id": client_id,
                     "vertical": cfg.get("vertical"),
                     "hook": f"/hook/{client_id}/<secret>/inbound"})
+
+
+@app.post("/admin/probe")
+def admin_probe():
+    """intake.py's site discovery as a service: URL in, found pages + probe
+    report out. The onboarding wizard's step 2. Optional wp_user/wp_password
+    let it also verify publish capability and read the full page list."""
+    _admin_auth()
+    d = request.get_json(silent=True) or {}
+    site = str(d.get("site") or "").strip().rstrip("/")
+    if not re.match(r"^https://[a-z0-9][a-z0-9.-]+\.[a-z]{2,}(/|$)", site, re.I):
+        abort(400, "site must be a public https URL")
+    host = site.split("//", 1)[1].split("/")[0].split(":")[0].lower()
+    if host in ("localhost",) or re.match(r"^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)", host):
+        abort(400, "internal addresses are not probeable")
+    import intake
+    rep = intake.Report()
+    siteinfo = intake.probe_site(site, rep)
+    user = str(d.get("wp_user") or "")
+    pw = str(d.get("wp_password") or "")
+    auth = intake.probe_auth(site, user, pw, rep) if (user and pw) else {"ok": False}
+    pages = intake.discover_pages(site, user, pw, rep) if siteinfo.get("rest") else []
+    found = intake.classify(pages, rep) if pages else {"towns": [], "services": [], "hubs": []}
+    return jsonify({"site": site, "rest": siteinfo, "auth": auth, "page_count": len(pages),
+                    "found": found, "blocking": rep.blocking,
+                    "report": [{"level": lv.strip(), "name": n, "detail": dt}
+                               for lv, n, dt in rep.rows]})
 
 
 @app.post("/admin/clients/<client_id>/test-wp")

@@ -4,7 +4,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir --upgrade pip
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY jobgen.py webhook_receiver.py publish.py hub_page.py townpage.py vertical.py wsgi.py ./
+COPY jobgen.py webhook_receiver.py publish.py hub_page.py townpage.py vertical.py wsgi.py intake.py ./
 COPY verticals/ ./verticals/
 COPY clients/ ./clients/
 # engine/ carries the config + pack JSON schemas the control plane serves to
