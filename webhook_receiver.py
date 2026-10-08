@@ -1518,7 +1518,13 @@ def admin_clients():
     for cid, block in CFG.get("clients", {}).items():
         src = "volume" if (BLOCKS_DIR / f"{cid}.json").exists() and not os.environ.get(
             "RECEIVER_CONFIG_JSON", "").count(f'"{cid}"') else "env"
-        out.append({"client_id": cid, "source": src, "entry": _mask(block)})
+        try:
+            cfg = load_client_config(cid)
+            vert, biz = cfg.get("vertical"), cfg.get("business_name")
+        except Exception:
+            vert, biz = None, None
+        out.append({"client_id": cid, "source": src, "vertical": vert,
+                    "business_name": biz, "entry": _mask(block)})
     return jsonify({"clients": out})
 
 
@@ -1669,6 +1675,40 @@ def pair_redeem():
     p.write_text(json.dumps(rec))
     log(f"pairing redeemed by {rec['redeemed']['site_url']}")
     return jsonify({"ok": True})
+
+
+@app.get("/admin/clients/<client_id>/jobs")
+def admin_client_jobs(client_id: str):
+    """The jobs list for the portal dashboard: same rows as /jobs/<client> but
+    behind the agency admin token (and therefore CORS-reachable) instead of
+    the per-client secret, plus timestamps and per-job cost for usage views."""
+    _admin_auth()
+    if not (CFG.get("clients", {}).get(client_id) or load_block(client_id)):
+        abort(404)
+    rows = []
+    for d in sorted(JOBS.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        sp = d / "status.json"
+        if not d.is_dir() or d.name.startswith("_") or not sp.exists():
+            continue
+        try:
+            st = json.loads(sp.read_text())
+        except Exception:
+            continue
+        if st.get("client_id") != client_id:
+            continue
+        rows.append({
+            "job_id": d.name,
+            "verdict": st.get("verdict"),
+            "state": st.get("state"),
+            "headline": st.get("headline"),
+            "wp_url": (st.get("wp") or {}).get("url"),
+            "ts": sp.stat().st_mtime,
+            "cost_usd": st.get("cost_usd"),
+            "quality": st.get("quality_score"),
+        })
+        if len(rows) >= 25:
+            break
+    return jsonify({"client": client_id, "count": len(rows), "jobs": rows})
 
 
 @app.post("/admin/clients/<client_id>/test-wp")
