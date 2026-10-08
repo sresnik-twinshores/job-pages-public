@@ -130,19 +130,36 @@ def discover_pages(site: str, user: str, pw: str, rep: Report) -> List[Dict[str,
     return pages
 
 
-def classify(pages: List[Dict[str, Any]], rep: Report) -> Dict[str, List[Dict[str, str]]]:
-    """Split real pages into service-area and service pages by their URL path."""
+DEFAULT_DISCOVERY = {
+    "area_paths": ["/service-areas/"],
+    "service_path_re": r"/(windows|doors|siding|roofing|services)/",
+    "hub_slugs": ["projects", "gallery", "service-areas"],
+}
+
+
+def classify(pages: List[Dict[str, Any]], rep: Report,
+             discovery: Optional[Dict[str, Any]] = None) -> Dict[str, List[Dict[str, str]]]:
+    """Split real pages into area and service pages by their URL path.
+
+    The patterns come from the vertical pack's `discovery` block (each vertical
+    knows where its sites keep area pages); the default is the original
+    home-services behaviour so the CLI keeps working unchanged."""
+    disc = discovery or DEFAULT_DISCOVERY
+    area_paths = disc.get("area_paths") or DEFAULT_DISCOVERY["area_paths"]
+    service_re = disc.get("service_path_re") or DEFAULT_DISCOVERY["service_path_re"]
+    hub_slugs = set(disc.get("hub_slugs") or DEFAULT_DISCOVERY["hub_slugs"])
+    area_slugs = {ap.strip("/") for ap in area_paths}
     towns, services, hubs = [], [], []
     for p in pages:
         path = "/" + p["link"].split("//", 1)[-1].split("/", 1)[-1]
         path = re.sub(r"^//", "/", path)
         slug, title = p["slug"], re.sub(r"<[^>]+>", "", p["title"]["rendered"]).strip()
-        if "/service-areas/" in path and slug != "service-areas":
+        if any(ap in path for ap in area_paths) and slug not in area_slugs:
             towns.append({"slug": slug, "label": title, "url": path, "county": ""})
-        elif re.search(r"/(windows|doors|siding|roofing|services)/", path):
+        elif re.search(service_re, path):
             services.append({"slug": slug, "label": title, "url": path,
                              "pillar": "/" + path.strip("/").split("/")[0] + "/"})
-        elif slug in ("projects", "gallery", "service-areas"):
+        elif slug in hub_slugs:
             hubs.append({"slug": slug, "url": path})
     # Both lists become schema enums. An empty enum is rejected by the API
     # ("Enum must be a non-empty array"), so EVERY job fails until it is filled in.

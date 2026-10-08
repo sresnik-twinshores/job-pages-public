@@ -1,5 +1,5 @@
 {
-  "_comment": "Vertical pack manifest. Everything vertical-specific lives in this folder; engine code (jobgen, webhook_receiver, publish, townpage, hub_page) must contain no vertical vocabulary. Clients select a pack with \"vertical\": \"home-services@1\" in their config — the version is pinned so a pack update never silently changes a live client's behaviour.",
+  "_comment": "Vertical pack manifest. Everything vertical-specific lives in this folder; engine code (jobgen, webhook_receiver, publish, townpage, hub_page) must contain no vertical vocabulary. Clients select a pack with \"vertical\": \"home-services@1\" in their config \u2014 the version is pinned so a pack update never silently changes a live client's behaviour.",
   "id": "home-services",
   "version": 1,
   "label": "Home Services Job Pages",
@@ -34,5 +34,16 @@
   "templates": {
     "preview": "templates/preview.html.tmpl",
     "area_page": "templates/area-page.html.tmpl"
+  },
+  "discovery": {
+    "area_paths": [
+      "/service-areas/"
+    ],
+    "service_path_re": "/(windows|doors|siding|roofing|services)/",
+    "hub_slugs": [
+      "projects",
+      "gallery",
+      "service-areas"
+    ]
   }
 }

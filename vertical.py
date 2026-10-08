@@ -141,6 +141,11 @@ class Pack:
         # the engine's plain body+figures layout (the original behaviour).
         wp_page = manifest["templates"].get("wp_page")
         self.wp_page_template: str = _text(wp_page) if wp_page else ""
+        # Site-discovery patterns for intake/probe: where this vertical's area
+        # and service pages live on a typical site. The engine carries no
+        # default — path slugs are vertical vocabulary, so the fallback lives
+        # in intake.py (exempt from the guard) and packs declare their own.
+        self.discovery: Dict[str, Any] = manifest.get("discovery") or {}
 
     # ---- client-resolved surfaces -------------------------------------------
     def write_prompt(self, cfg: Dict[str, Any]) -> str:

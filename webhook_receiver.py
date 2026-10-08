@@ -1596,16 +1596,79 @@ def admin_probe():
         abort(400, "internal addresses are not probeable")
     import intake
     rep = intake.Report()
+    # Discovery patterns come from the chosen vertical's pack — each vertical
+    # knows where its sites keep area pages (the whole reason this moved out
+    # of hardcoded slugs).
+    ref = str(d.get("vertical") or "home-services@1")
+    try:
+        discovery = vertical.load_pack(ref).discovery
+    except vertical.PackError as e:
+        abort(400, f"unknown vertical: {e}")
     siteinfo = intake.probe_site(site, rep)
     user = str(d.get("wp_user") or "")
     pw = str(d.get("wp_password") or "")
     auth = intake.probe_auth(site, user, pw, rep) if (user and pw) else {"ok": False}
     pages = intake.discover_pages(site, user, pw, rep) if siteinfo.get("rest") else []
-    found = intake.classify(pages, rep) if pages else {"towns": [], "services": [], "hubs": []}
-    return jsonify({"site": site, "rest": siteinfo, "auth": auth, "page_count": len(pages),
+    found = intake.classify(pages, rep, discovery) if pages else {"towns": [], "services": [], "hubs": []}
+    return jsonify({"site": site, "vertical": ref, "rest": siteinfo, "auth": auth, "page_count": len(pages),
                     "found": found, "blocking": rep.blocking,
                     "report": [{"level": lv.strip(), "name": n, "detail": dt}
                                for lv, n, dt in rep.rows]})
+
+
+# Pairing codes: the FieldPress Connect plugin's handshake. The wizard mints a
+# one-time code (admin-authed); the plugin redeems it from inside WordPress
+# with a freshly created application password (public route, unguessable code,
+# one hour, single use); the wizard polls and fills itself in. Nobody ever
+# copies a password by hand.
+PAIRINGS_DIR = JOBS / "_config" / "pairings"
+
+
+def _pairing_path(code: str) -> Optional[Path]:
+    if not re.fullmatch(r"[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}", code):
+        return None
+    return PAIRINGS_DIR / f"{code}.json"
+
+
+@app.post("/admin/pairings")
+def admin_pairing_create():
+    _admin_auth()
+    code = "-".join(uuid.uuid4().hex[:4] for _ in range(3))
+    PAIRINGS_DIR.mkdir(parents=True, exist_ok=True)
+    (_pairing_path(code)).write_text(json.dumps(
+        {"created": time.time(), "expires": time.time() + 3600, "redeemed": None}))
+    return jsonify({"code": code, "expires_in": 3600})
+
+
+@app.get("/admin/pairings/<code>")
+def admin_pairing_get(code: str):
+    _admin_auth()
+    p = _pairing_path(code)
+    if not p or not p.exists():
+        abort(404)
+    return jsonify(json.loads(p.read_text()))
+
+
+@app.post("/pair")
+def pair_redeem():
+    d = request.get_json(silent=True) or {}
+    p = _pairing_path(str(d.get("code") or ""))
+    if not p or not p.exists():
+        abort(404)
+    rec = json.loads(p.read_text())
+    if rec.get("redeemed"):
+        abort(409, "code already used")
+    if time.time() > rec.get("expires", 0):
+        p.unlink(missing_ok=True)
+        abort(410, "code expired")
+    rec["redeemed"] = {k: str(d.get(k) or "")[:300]
+                       for k in ("site_url", "user", "app_password", "wp_version", "plugin_version")}
+    rec["redeemed"]["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if not rec["redeemed"]["site_url"] or not rec["redeemed"]["app_password"]:
+        abort(400, "site_url and app_password required")
+    p.write_text(json.dumps(rec))
+    log(f"pairing redeemed by {rec['redeemed']['site_url']}")
+    return jsonify({"ok": True})
 
 
 @app.post("/admin/clients/<client_id>/test-wp")
