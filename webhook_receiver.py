@@ -1029,6 +1029,34 @@ def ghl_callback():
             f"You can close this tab.</p></div>")
 
 
+@app.get("/admin/connect/locations")
+def admin_connect_locations():
+    """Locations whose tokens live on this receiver — the wizard's picker.
+    Names are fetched once from the API and cached into the token file."""
+    _admin_auth()
+    out = []
+    if GHL_DIR.exists():
+        for p in sorted(GHL_DIR.glob("location-*.json")):
+            lid = p.stem.replace("location-", "")
+            tok = json.loads(p.read_text())
+            name = tok.get("_name", "")
+            if not name:
+                access = ghl_location_token(lid)
+                if access:
+                    lr = requests.get(f"{GHL_API}/locations/{lid}", timeout=15,
+                                      headers={"Authorization": f"Bearer {access}",
+                                               "Version": "2021-07-28"})
+                    if lr.status_code == 200:
+                        name = (lr.json().get("location") or {}).get("name", "")
+                        tok = json.loads(p.read_text())
+                        tok["_name"] = name
+                        p.write_text(json.dumps(tok))
+            mapped = next((cid for cid, v in CFG.get("clients", {}).items()
+                           if (v.get("ghl") or {}).get("location_id") == lid), None)
+            out.append({"location_id": lid, "name": name, "mapped_to": mapped})
+    return jsonify({"locations": out})
+
+
 @app.post("/connect/events")
 def ghl_events():
     """The marketplace app's webhook. Fires for every inbound message on every
