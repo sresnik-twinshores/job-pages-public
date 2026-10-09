@@ -959,7 +959,9 @@ def _ghl_creds():
 
 
 def _ghl_redirect_uri() -> str:
-    return request.host_url.rstrip("/") + "/connect/oauth/callback"
+    # Railway terminates TLS at the proxy; request.host_url says http. The
+    # registered redirect is https and OAuth requires an exact match.
+    return "https://" + request.host + "/connect/oauth/callback"
 
 
 def _ghl_save(tok: Dict[str, Any]) -> None:
