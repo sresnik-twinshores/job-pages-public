@@ -959,7 +959,7 @@ def _ghl_creds():
 
 
 def _ghl_redirect_uri() -> str:
-    return request.host_url.rstrip("/") + "/ghl/oauth/callback"
+    return request.host_url.rstrip("/") + "/connect/oauth/callback"
 
 
 def _ghl_save(tok: Dict[str, Any]) -> None:
@@ -990,7 +990,7 @@ def ghl_location_token(location_id: str) -> str:
     return tok.get("access_token", "")
 
 
-@app.get("/ghl/install")
+@app.get("/connect/install")
 def ghl_install():
     """Send the operator to GHL's consent screen. The redirect comes back to
     this same host, so the app's registered redirect URL must point here."""
@@ -1003,7 +1003,7 @@ def ghl_install():
     return redirect(f"https://marketplace.gohighlevel.com/oauth/chooselocation?{q}")
 
 
-@app.get("/ghl/oauth/callback")
+@app.get("/connect/oauth/callback")
 def ghl_callback():
     code = request.args.get("code", "")
     if not code:
@@ -1027,7 +1027,7 @@ def ghl_callback():
             f"You can close this tab.</p></div>")
 
 
-@app.post("/ghl/events")
+@app.post("/connect/events")
 def ghl_events():
     """The marketplace app's webhook. Fires for every inbound message on every
     installed location; we map location -> client, resolve the sender's phone
