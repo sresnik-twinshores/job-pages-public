@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
-from flask import Flask, abort, jsonify, request, send_from_directory
+from flask import Flask, abort, jsonify, redirect, request, send_from_directory
 
 import jobgen
 import publish as wp_publish
@@ -360,10 +360,15 @@ def send_sms_ghl(cc: Dict[str, Any], contact_id: str, text: str) -> bool:
     an env var so it never sits in the config JSON.
     """
     g = cc.get("ghl") or {}
+    # Marketplace-app clients carry a location_id; their sends ride the stored
+    # OAuth token (auto-refreshing). The env-var PIT remains for legacy clients.
+    token = ghl_location_token(g.get("location_id", ""))
     env_name = g.get("api_token_env", "")
-    token = os.environ.get(env_name, "")
     if not token:
-        log(f"  ! GHL API skipped: env var {env_name!r} is empty or unset")
+        token = os.environ.get(env_name, "")
+    if not token:
+        log(f"  ! GHL API skipped: no app token for location "
+            f"{g.get('location_id') or '-'} and env var {env_name!r} unset")
         return False
     if not contact_id:
         log("  ! GHL API skipped: no contact_id on this batch")
@@ -938,6 +943,131 @@ def sweeper() -> None:
                 log("! batch failed\n" + traceback.format_exc())
 
 
+# ------------------------------------------------- GHL marketplace app ---
+# The receiver as the app backend: install consent lands tokens on the volume,
+# the app-level webhook feeds the same batching pipeline the workflow route
+# uses, and replies prefer the stored OAuth token over the per-client env PIT.
+# This is what removes per-client workflow wiring (spike-proven 2026-10-07).
+GHL_DIR = JOBS / "_config" / "ghl"
+GHL_API = "https://services.leadconnectorhq.com"
+GHL_SCOPES = ("conversations/message.readonly conversations/message.write "
+              "conversations.readonly contacts.readonly locations.readonly")
+
+
+def _ghl_creds():
+    return os.environ.get("GHL_APP_CLIENT_ID", ""), os.environ.get("GHL_APP_CLIENT_SECRET", "")
+
+
+def _ghl_redirect_uri() -> str:
+    return request.host_url.rstrip("/") + "/ghl/oauth/callback"
+
+
+def _ghl_save(tok: Dict[str, Any]) -> None:
+    GHL_DIR.mkdir(parents=True, exist_ok=True)
+    tok["_saved"] = time.time()
+    name = f"location-{tok['locationId']}.json" if tok.get("locationId") else "agency.json"
+    (GHL_DIR / name).write_text(json.dumps(tok))
+
+
+def ghl_location_token(location_id: str) -> str:
+    """A live access token for the location, refreshing when near expiry."""
+    p = GHL_DIR / f"location-{location_id}.json"
+    if not location_id or not p.exists():
+        return ""
+    tok = json.loads(p.read_text())
+    if time.time() > tok.get("_saved", 0) + tok.get("expires_in", 86400) - 600:
+        cid, csec = _ghl_creds()
+        r = requests.post(f"{GHL_API}/oauth/token", timeout=30, data={
+            "client_id": cid, "client_secret": csec,
+            "grant_type": "refresh_token", "refresh_token": tok.get("refresh_token", "")})
+        if r.status_code == 200:
+            tok = r.json()
+            tok.setdefault("locationId", location_id)
+            _ghl_save(tok)
+            log(f"ghl: refreshed token for location {location_id}")
+        else:
+            log(f"! ghl token refresh failed for {location_id}: {r.status_code} {r.text[:150]}")
+    return tok.get("access_token", "")
+
+
+@app.get("/ghl/install")
+def ghl_install():
+    """Send the operator to GHL's consent screen. The redirect comes back to
+    this same host, so the app's registered redirect URL must point here."""
+    cid, _ = _ghl_creds()
+    if not cid:
+        abort(503, "GHL app credentials are not configured on this deployment")
+    from urllib.parse import urlencode
+    q = urlencode({"response_type": "code", "client_id": cid,
+                   "redirect_uri": _ghl_redirect_uri(), "scope": GHL_SCOPES})
+    return redirect(f"https://marketplace.gohighlevel.com/oauth/chooselocation?{q}")
+
+
+@app.get("/ghl/oauth/callback")
+def ghl_callback():
+    code = request.args.get("code", "")
+    if not code:
+        abort(400, "no authorization code")
+    cid, csec = _ghl_creds()
+    r = requests.post(f"{GHL_API}/oauth/token", timeout=30, data={
+        "client_id": cid, "client_secret": csec, "grant_type": "authorization_code",
+        "code": code, "redirect_uri": _ghl_redirect_uri()})
+    if r.status_code != 200:
+        log(f"! ghl oauth exchange failed: {r.status_code} {r.text[:200]}")
+        return f"<h2>Connection failed ({r.status_code})</h2><pre>{r.text[:300]}</pre>", 502
+    tok = r.json()
+    _ghl_save(tok)
+    lid = tok.get("locationId")
+    log(f"ghl: stored {'location ' + lid if lid else 'agency'} token "
+        f"(userType={tok.get('userType')})")
+    what = f"location <b>{lid}</b>" if lid else "your agency"
+    return (f"<div style='font-family:sans-serif;max-width:480px;margin:80px auto'>"
+            f"<h2>&#9989; Connected</h2><p>Token for {what} is stored on the receiver. "
+            f"Messages to this location's numbers now flow automatically. "
+            f"You can close this tab.</p></div>")
+
+
+@app.post("/ghl/events")
+def ghl_events():
+    """The marketplace app's webhook. Fires for every inbound message on every
+    installed location; we map location -> client, resolve the sender's phone
+    via the contacts API (the event carries only a contact id), and hand the
+    result to the same queue the workflow route feeds. The sender allowlist
+    downstream is the filter that keeps non-intake chatter out."""
+    d = request.get_json(silent=True) or {}
+    cid_app, _ = _ghl_creds()
+    if cid_app and d.get("appId") and not cid_app.startswith(str(d["appId"])):
+        abort(403)
+    if d.get("type") != "InboundMessage":
+        return jsonify({"ok": True, "ignored": d.get("type", "unknown")})
+    lid = str(d.get("locationId") or "")
+    client_id = None
+    for k, v in CFG.get("clients", {}).items():
+        if (v.get("ghl") or {}).get("location_id") == lid:
+            client_id = k
+            break
+    if not client_id:
+        log(f"ghl event: unmapped location {lid} — enable it on a client entry")
+        return jsonify({"ok": True, "ignored": "unmapped location"})
+    cc = CFG["clients"][client_id]
+    phone = ""
+    contact_id = str(d.get("contactId") or "")
+    access = ghl_location_token(lid)
+    if access and contact_id:
+        cr = requests.get(f"{GHL_API}/contacts/{contact_id}", timeout=20,
+                          headers={"Authorization": f"Bearer {access}", "Version": "2021-07-28"})
+        if cr.status_code == 200:
+            phone = ((cr.json().get("contact") or {}).get("phone")) or ""
+        else:
+            log(f"ghl: contact lookup {contact_id} failed {cr.status_code}")
+    atts = d.get("attachments") or []
+    if isinstance(atts, str):
+        atts = [atts]
+    return _queue_inbound(client_id, cc, {
+        "phone": phone, "message": d.get("body", ""),
+        "attachments": atts, "contact_id": contact_id})
+
+
 # -------------------------------------------------------------------- routes ---
 @app.post("/hook/<client_id>/<path_token>/inbound")
 def inbound_path(client_id: str, path_token: str):
@@ -961,6 +1091,13 @@ def inbound(client_id: str, path_token: str = ""):
         raw = request.get_data(as_text=True)[:4000]
         log(f"  ! body did not parse as JSON or form. Raw: {raw[:600]}")
 
+    return _queue_inbound(client_id, cc, payload)
+
+
+def _queue_inbound(client_id: str, cc: Dict[str, Any], payload: Dict[str, Any]):
+    """The shared inbound core: workflow-webhook route and the marketplace-app
+    events route both land here once they've produced a payload extract()
+    understands. Everything below the sender allowlist is identical for both."""
     msg = extract(payload)
 
     # Identify the sender BEFORE recording anything. A misconfigured GHL trigger sends
