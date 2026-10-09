@@ -1583,13 +1583,46 @@ def waitlist():
 # connection checks. Writes land on the volume (BLOCKS_DIR / CLIENT_CONFIG_DIR)
 # so a new client needs no env change and no redeploy.
 
+AGENCIES_DIR = JOBS / "_config" / "agencies"
+
+
+def _key_file(key: str) -> Path:
+    import hashlib
+    return AGENCIES_DIR / (hashlib.sha256(key.encode()).hexdigest() + ".json")
+
+
 def _admin_auth() -> None:
+    """Operator token (env) or an issued agency license key (volume)."""
     tok = os.environ.get("ADMIN_TOKEN", "")
     if not tok:
         abort(503, "ADMIN_TOKEN is not configured on this deployment")
     supplied = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if not hmac.compare_digest(supplied, tok):
+    if hmac.compare_digest(supplied, tok):
+        return
+    if supplied.startswith("fp_live_") and _key_file(supplied).exists():
+        return
+    abort(403)
+
+
+def _operator_only() -> None:
+    tok = os.environ.get("ADMIN_TOKEN", "")
+    supplied = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if not tok or not hmac.compare_digest(supplied, tok):
         abort(403)
+
+
+@app.post("/admin/agencies")
+def admin_agency_create():
+    """Operator mints a license key. Shown once; only its hash is stored."""
+    _operator_only()
+    d = request.get_json(silent=True) or {}
+    key = "fp_live_" + uuid.uuid4().hex
+    AGENCIES_DIR.mkdir(parents=True, exist_ok=True)
+    _key_file(key).write_text(json.dumps(
+        {"name": str(d.get("name") or "")[:120],
+         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}))
+    log(f"agency key issued: {d.get('name')}")
+    return jsonify({"ok": True, "key": key})
 
 
 # The portal is served from its own origin; the browser needs CORS consent to

@@ -1,4 +1,6 @@
-FROM python:3.12-slim
+# ECR Public mirror of the official image — Docker Hub rate-limits (429) broke
+# three deploys on 2026-10-09; this registry serves the same bytes unthrottled.
+FROM public.ecr.aws/docker/library/python:3.12-slim
 
 WORKDIR /app
 RUN pip install --no-cache-dir --upgrade pip
