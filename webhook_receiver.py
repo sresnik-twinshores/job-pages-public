@@ -1696,6 +1696,18 @@ def admin_client_put(client_id: str):
         abort(400, "body needs 'config' and 'entry' objects")
     if cfg.get("client_id") != client_id:
         abort(400, "config.client_id must match the URL")
+    # Updates may omit secrets they don't intend to change: fill the stored
+    # secret / WP password back in when the caller sends nothing or the masked
+    # sentinel. Lets the operator PATCH an entry (e.g. attach a GHL location)
+    # without ever having held the credential.
+    existing = load_block(client_id)
+    if existing:
+        if not entry.get("secret") or entry.get("secret") == "***":
+            entry["secret"] = existing.get("secret", "")
+        wp_new, wp_old = entry.get("wordpress") or {}, existing.get("wordpress") or {}
+        if (not wp_new.get("app_password") or wp_new.get("app_password") == "***")                 and wp_old.get("app_password"):
+            wp_new["app_password"] = wp_old["app_password"]
+            entry["wordpress"] = wp_new
     try:
         pack = vertical.pack_for(cfg, log=log)
     except vertical.PackError as e:
