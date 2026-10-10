@@ -943,6 +943,98 @@ def sweeper() -> None:
                 log("! batch failed\n" + traceback.format_exc())
 
 
+# ------------------------------------------------------------ billing ---
+# Stripe self-serve: pricing page -> /billing/checkout -> Stripe Checkout
+# (5-day trial, promo codes on) -> on checkout.session.completed the webhook
+# mints the agency's license key and records it for retrieval on the success
+# page. Env: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_<TIER>.
+TIERS = {
+    "starter": {"label": "Starter", "sites": 3, "locations": 3, "pages": 150},
+    "agency":  {"label": "Agency",  "sites": 10, "locations": 10, "pages": 600},
+    "scale":   {"label": "Scale",   "sites": 25, "locations": 25, "pages": 1500},
+}
+BILLING_DIR = JOBS / "_config" / "billing"
+
+
+def _stripe():
+    import stripe
+    key = os.environ.get("STRIPE_SECRET_KEY", "")
+    if not key:
+        return None
+    stripe.api_key = key
+    return stripe
+
+
+@app.post("/billing/checkout")
+def billing_checkout():
+    """Public: create a Checkout session for a tier and return its URL."""
+    st = _stripe()
+    if not st:
+        return jsonify({"ok": False, "error": "billing not configured"}), 503
+    d = request.get_json(silent=True) or {}
+    tier = str(d.get("tier") or "").lower()
+    if tier not in TIERS:
+        abort(400, "unknown tier")
+    price = os.environ.get(f"STRIPE_PRICE_{tier.upper()}", "")
+    if not price:
+        return jsonify({"ok": False, "error": f"no price for {tier}"}), 503
+    base = "https://fieldpress.app"
+    try:
+        sess = st.checkout.Session.create(
+            mode="subscription",
+            line_items=[{"price": price, "quantity": 1}],
+            subscription_data={"trial_period_days": 5, "metadata": {"tier": tier}},
+            allow_promotion_codes=True,
+            metadata={"tier": tier},
+            success_url=base + "/welcome/?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url=base + "/pricing/",
+        )
+        return jsonify({"ok": True, "url": sess.url})
+    except Exception as e:
+        log(f"! stripe checkout error: {e}")
+        return jsonify({"ok": False, "error": str(e)[:150]}), 502
+
+
+@app.post("/billing/webhook")
+def billing_webhook():
+    """Stripe -> us. On a completed checkout, mint the agency key across the
+    platform and stash it keyed by session id for the welcome page to claim."""
+    st = _stripe()
+    secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    if not st or not secret:
+        abort(503)
+    try:
+        event = st.Webhook.construct_event(
+            request.get_data(), request.headers.get("Stripe-Signature", ""), secret)
+    except Exception as e:
+        log(f"! stripe webhook verify failed: {e}")
+        abort(400)
+    if event["type"] == "checkout.session.completed":
+        sess = event["data"]["object"]
+        tier = (sess.get("metadata") or {}).get("tier", "agency")
+        key = "fp_live_" + uuid.uuid4().hex
+        info = {"name": sess.get("customer_details", {}).get("email", "") or "Stripe customer",
+                "tier": tier, "stripe_customer": sess.get("customer", ""),
+                "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        _key_file(key).write_text(json.dumps(info))
+        BILLING_DIR.mkdir(parents=True, exist_ok=True)
+        (BILLING_DIR / f"{sess['id']}.json").write_text(json.dumps({"key": key, **info}))
+        log(f"billing: issued {tier} key for {info['name']}")
+    return jsonify({"received": True})
+
+
+@app.get("/billing/claim/<session_id>")
+def billing_claim(session_id: str):
+    """The welcome page calls this with the Checkout session id to show the
+    freshly issued key once. Only issued-via-Stripe keys live here."""
+    if not re.fullmatch(r"cs_[A-Za-z0-9_]+", session_id):
+        abort(400)
+    p = BILLING_DIR / f"{session_id}.json"
+    if not p.exists():
+        return jsonify({"ok": False, "pending": True})
+    return jsonify({"ok": True, **json.loads(p.read_text())})
+
+
 # ------------------------------------------------- GHL marketplace app ---
 # The receiver as the app backend: install consent lands tokens on the volume,
 # the app-level webhook feeds the same batching pipeline the workflow route
@@ -1680,7 +1772,7 @@ ADMIN_ORIGINS = [o.strip() for o in os.environ.get(
 
 @app.after_request
 def _admin_cors(resp):
-    if request.path.startswith("/admin/"):
+    if request.path.startswith("/admin/") or request.path.startswith("/billing/"):
         origin = request.headers.get("Origin", "")
         if origin in ADMIN_ORIGINS:
             resp.headers["Access-Control-Allow-Origin"] = origin

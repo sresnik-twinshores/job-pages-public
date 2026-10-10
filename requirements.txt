@@ -3,3 +3,4 @@ pillow>=11
 flask>=3
 requests>=2.31
 gunicorn>=21
+stripe>=11.0
