@@ -1087,7 +1087,7 @@ def billing_claim(session_id: str):
 GHL_DIR = JOBS / "_config" / "ghl"
 GHL_API = "https://services.leadconnectorhq.com"
 GHL_SCOPES = ("conversations/message.readonly conversations/message.write "
-              "conversations.readonly contacts.readonly locations.readonly")
+              "conversations.readonly contacts.readonly contacts.write locations.readonly")
 
 
 def _ghl_creds():
