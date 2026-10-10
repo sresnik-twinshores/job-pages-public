@@ -960,6 +960,11 @@ def leads_capture():
         abort(400, "email required")
     rec = {k: str(d.get(k) or "")[:200] for k in ("email", "name", "agency", "phone", "source")}
     rec["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # Consent record for A2P/TCPA: store the exact disclosure text the person
+    # agreed to, plus when and from where. This is the legal proof of consent.
+    rec["consent"] = bool(d.get("consent"))
+    rec["consent_text"] = str(d.get("consent_text") or "")[:1200]
+    rec["ip"] = request.headers.get("CF-Connecting-IP", request.remote_addr or "")
     LEADS_DIR.mkdir(parents=True, exist_ok=True)
     with (LEADS_DIR / "leads.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
