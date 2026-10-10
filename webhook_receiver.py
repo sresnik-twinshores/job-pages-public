@@ -1639,12 +1639,29 @@ def _operator_only() -> None:
         abort(403)
 
 
+@app.get("/admin/whoami")
+def admin_whoami():
+    """Who holds this bearer: the platform operator, or an issued agency key."""
+    _admin_auth()
+    supplied = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if hmac.compare_digest(supplied, os.environ.get("ADMIN_TOKEN", "")):
+        return jsonify({"role": "operator"})
+    info = json.loads(_key_file(supplied).read_text())
+    return jsonify({"role": "agency", "name": info.get("name", ""),
+                    "created": info.get("created", "")})
+
+
 @app.post("/admin/agencies")
 def admin_agency_create():
-    """Operator mints a license key. Shown once; only its hash is stored."""
+    """Operator mints a license key. Shown once; only its hash is stored.
+    The caller may supply the key so one key can be registered identically
+    across every receiver in the platform directory."""
     _operator_only()
     d = request.get_json(silent=True) or {}
-    key = "fp_live_" + uuid.uuid4().hex
+    key = str(d.get("key") or "")
+    if key and not re.fullmatch(r"fp_live_[0-9a-f]{32}", key):
+        abort(400, "supplied key must be fp_live_ + 32 hex chars")
+    key = key or "fp_live_" + uuid.uuid4().hex
     AGENCIES_DIR.mkdir(parents=True, exist_ok=True)
     _key_file(key).write_text(json.dumps(
         {"name": str(d.get("name") or "")[:120],
