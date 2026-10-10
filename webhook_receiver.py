@@ -1736,6 +1736,8 @@ def waitlist():
            for k in ("email", "name", "agency", "phone", "clients", "ghl", "vertical", "source")}
     if "@" not in rec["email"] or len(rec["email"]) < 5:
         abort(400)
+    rec["consent"] = bool(d.get("consent"))
+    rec["consent_text"] = str(d.get("consent_text") or "")[:1200]
     rec["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     rec["ip"] = request.headers.get("CF-Connecting-IP", request.remote_addr or "")
     wl = JOBS / "_waitlist"
