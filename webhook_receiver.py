@@ -943,6 +943,50 @@ def sweeper() -> None:
                 log("! batch failed\n" + traceback.format_exc())
 
 
+# -------------------------------------------------------------- leads ---
+# Portal register/login gate -> capture the agency lead. Always stored; also
+# pushed into GHL as a contact when GHL_LEADS_LOCATION_ID names a connected
+# location (the operator's CRM sub-account).
+LEADS_DIR = JOBS / "_config" / "leads"
+
+
+@app.post("/leads")
+def leads_capture():
+    d = request.get_json(silent=True) or {}
+    if d.get("website"):                       # honeypot
+        return jsonify({"ok": True})
+    email = str(d.get("email") or "").strip()
+    if "@" not in email:
+        abort(400, "email required")
+    rec = {k: str(d.get(k) or "")[:200] for k in ("email", "name", "agency", "phone", "source")}
+    rec["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    LEADS_DIR.mkdir(parents=True, exist_ok=True)
+    with (LEADS_DIR / "leads.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+    # push to GHL CRM if a leads location is connected
+    loc = os.environ.get("GHL_LEADS_LOCATION_ID", "")
+    access = ghl_location_token(loc) if loc else ""
+    ghl_ok = False
+    if access:
+        first, _, last = rec["name"].partition(" ")
+        try:
+            r = requests.post(f"{GHL_API}/contacts/", timeout=20,
+                headers={"Authorization": f"Bearer {access}", "Version": "2021-07-28",
+                         "Content-Type": "application/json"},
+                json={"locationId": loc, "email": email, "phone": rec["phone"],
+                      "firstName": first, "lastName": last,
+                      "companyName": rec["agency"],
+                      "source": "FieldPress " + (rec["source"] or "portal"),
+                      "tags": ["fieldpress-lead", rec["source"] or "portal"]})
+            ghl_ok = r.status_code in (200, 201)
+            if not ghl_ok:
+                log(f"  ! GHL lead create {r.status_code}: {r.text[:120]}")
+        except Exception as e:
+            log(f"  ! GHL lead error: {e}")
+    log(f"lead: {email} {rec.get('agency','')} (ghl={ghl_ok})")
+    return jsonify({"ok": True})
+
+
 # ------------------------------------------------------------ billing ---
 # Stripe self-serve: pricing page -> /billing/checkout -> Stripe Checkout
 # (5-day trial, promo codes on) -> on checkout.session.completed the webhook
@@ -1772,7 +1816,7 @@ ADMIN_ORIGINS = [o.strip() for o in os.environ.get(
 
 @app.after_request
 def _admin_cors(resp):
-    if request.path.startswith("/admin/") or request.path.startswith("/billing/"):
+    if request.path.startswith("/admin/") or request.path.startswith("/billing/") or request.path == "/leads":
         origin = request.headers.get("Origin", "")
         if origin in ADMIN_ORIGINS:
             resp.headers["Access-Control-Allow-Origin"] = origin
